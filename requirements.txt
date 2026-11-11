@@ -1,0 +1,6 @@
+textual>=8.2
+python-docx
+docxtpl
+jinja2
+openpyxl
+requests

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# ITtool в терминале. Первый запуск сам ставит зависимости в .venv рядом.
+set -e
+DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+if [ ! -x "$DIR/.venv/bin/python" ]; then
+    echo "Первый запуск: ставлю зависимости в $DIR/.venv …"
+    python3 -m venv "$DIR/.venv"
+    "$DIR/.venv/bin/pip" install -q -r "$DIR/requirements.txt"
+fi
+case "${1:-}" in
+    bot) exec "$DIR/.venv/bin/python" "$DIR/bot_service.py" ;;
+    api) shift; exec "$DIR/.venv/bin/python" "$DIR/api.py" "$@" ;;
+    *)   exec "$DIR/.venv/bin/python" "$DIR/ittool.py" "$@" ;;
+esac

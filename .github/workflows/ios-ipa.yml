@@ -1,0 +1,148 @@
+name: iOS IPA
+
+on:
+  push:
+    paths: ["ios/**", ".github/workflows/ios-ipa.yml"]
+  workflow_dispatch:
+    inputs:
+      ios26:
+        description: "Проверить и на iOS 26.5 (ещё ~120 минут лимита)"
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    # Liquid Glass (glassEffect) есть только в iOS 26 SDK — нужен Xcode 26+
+    runs-on: macos-26
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate Xcode project
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Check Word report, email and backup
+        run: |
+          mkdir -p /tmp/check
+          swiftc -o /tmp/check/run App/API.swift App/Docx.swift App/Mail.swift App/Backup.swift Checks/main.swift
+          /tmp/check/run /tmp/check
+          python3 -m venv /tmp/check/venv
+          /tmp/check/venv/bin/pip install -q python-docx openpyxl
+          /tmp/check/venv/bin/python Checks/check_mail.py /tmp/check
+          /tmp/check/venv/bin/python Checks/check_backup.py /tmp/check
+
+      - name: Build (unsigned)
+        run: |
+          xcodebuild -project ITtool.xcodeproj -target ITtool \
+            -configuration Release -sdk iphoneos \
+            SYMROOT="$PWD/build" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package IPA
+        run: |
+          mkdir Payload
+          cp -R build/Release-iphoneos/ITtool.app Payload/
+          zip -qr ITtool.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ITtool-ipa
+          path: ios/ITtool.ipa
+
+  ui:
+    # проход по приложению в симуляторе iPhone 15 Pro Max (как у пользователя): кнопки нажимаются,
+    # раскладка проверяется, каждый экран — скриншот в артефакте screens-<система>
+    # ios27 — iOS 27.2, как на телефоне, на каждый push; ios26 — тот же Xcode 26.6 и SDK iOS 26.5,
+    # что собирают IPA, только по кнопке Run workflow с галочкой ios26: минуты macOS идут ×10
+    strategy:
+      fail-fast: false
+      matrix:
+        name: ${{ fromJSON(inputs.ios26 && '["ios27", "ios26"]' || '["ios27"]') }}
+    runs-on: ${{ matrix.name == 'ios26' && 'macos-26' || 'xcode-27' }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        if: matrix.name == 'ios27'
+        run: |
+          sudo xcode-select -s /Applications/Xcode_27.2.app || sudo xcode-select -s /Applications/Xcode_27.2_Release_Candidate.app
+          xcodebuild -version
+
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Boot simulator
+        run: |
+          # новейшая iOS, которая поддерживает модель (бывают сборки iOS только под новые iPhone)
+          OUT=$(xcrun simctl list runtimes -j | python3 -c '
+          import json, sys
+          rts = [r for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and ".iOS-" in r["identifier"]]
+          for t in ["iPhone-15-Pro-Max", "iPhone-16-Pro-Max", "iPhone-17-Pro-Max"]:
+              t = "com.apple.CoreSimulator.SimDeviceType." + t
+              ok = [r for r in rts if any(d["identifier"] == t for d in r.get("supportedDeviceTypes", []))]
+              if ok:
+                  print(max(ok, key=lambda r: [int(p) for p in r["version"].split(".")])["identifier"], t)
+                  break
+          ')
+          RUNTIME=${OUT% *}
+          TYPE=${OUT#* }
+          echo "runtime $RUNTIME, device $TYPE"
+          UDID=$(xcrun simctl create REPORTER "$TYPE" "$RUNTIME")
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl ui "$UDID" appearance dark
+          # без подсказки «проведите по клавиатуре» при первом наборе текста (тест закрывает её и сам)
+          xcrun simctl spawn "$UDID" defaults write com.apple.Preferences DidShowContinuousPathIntroduction -bool true
+          xcrun simctl spawn "$UDID" defaults write com.apple.Preferences KeyboardContinuousPathEnabled -bool false
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+
+      - name: UI tests
+        run: |
+          status=0
+          xcodebuild test -project ITtool.xcodeproj -scheme ITtool -destination "id=$UDID" \
+            -resultBundlePath "$RUNNER_TEMP/ui.xcresult" CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual \
+            > "$RUNNER_TEMP/ui.log" 2>&1 || status=$?
+          grep -E "error:|warning: .*/(App|UITests)/|Test Case|Executed|TEST (SUCCEEDED|FAILED)|РАЗБОР" "$RUNNER_TEMP/ui.log" || true
+          exit $status
+
+      - name: Splash frames
+        # заставку XCUITest не ловит (ждёт, пока приложение успокоится) — запись экрана и лист кадров
+        if: always() && env.UDID != ''
+        run: |
+          mkdir -p "$RUNNER_TEMP/screens"
+          xcrun simctl terminate "$UDID" com.google.ios.youtubemusic 2>/dev/null || true
+          xcrun simctl io "$UDID" recordVideo --codec h264 --force "$RUNNER_TEMP/splash.mp4" &
+          REC=$!
+          sleep 2
+          xcrun simctl launch "$UDID" com.google.ios.youtubemusic -AppleLanguages "(ru)" -AppleLocale ru_RU || true
+          sleep 8
+          kill -INT $REC || true
+          wait $REC || true
+          swift Checks/splash_frames.swift "$RUNNER_TEMP/splash.mp4" "$RUNNER_TEMP/screens/splash-sheet.png" 2.0 0.25 32 || true
+
+      - name: Collect screenshots
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/screens"
+          cp "$HOME/Library/Caches/reporter-screens/"*.png "$RUNNER_TEMP/screens/" 2>/dev/null || true
+          cp "$RUNNER_TEMP/ui.log" "$RUNNER_TEMP/screens/" 2>/dev/null || true
+          ls "$RUNNER_TEMP/screens"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screens-${{ matrix.name }}
+          path: ${{ runner.temp }}/screens

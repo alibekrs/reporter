@@ -1,0 +1,19 @@
+# сборка и зависимости — собираются заново (build_all.bat, npm install, cargo)
+__pycache__/
+*.pyc
+/build/
+/dist/
+/engine/
+/release/
+glass/node_modules/
+glass/src-tauri/target/
+glass/src-tauri/gen/schemas/
+
+# настройки этого компьютера
+python_path.txt
+
+# журналы
+*.log
+
+# окружение Python
+/.venv/

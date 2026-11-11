@@ -1,0 +1,5 @@
+# Исходники — LF на любой машине
+* text=auto eol=lf
+
+*.png binary
+*.docx binary

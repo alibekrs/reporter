@@ -1,0 +1,14 @@
+# API ITtool для приложения на iPhone. Ставится deploy/install.sh.
+[Unit]
+Description=ITtool: API для iPhone
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/ITtool/ittool api
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

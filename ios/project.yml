@@ -1,0 +1,61 @@
+# XcodeGen: .xcodeproj собирается на macOS-раннере (.github/workflows/ios-ipa.yml), в git его нет.
+name: ITtool
+options:
+  deploymentTarget:
+    iOS: "26.0"
+targets:
+  ITtool:
+    type: application
+    platform: iOS
+    sources: [App]
+    info:
+      path: App/Info.plist
+      properties:
+        CADisableMinimumFrameDurationOnPhone: true   # анимации 120 Гц на экранах ProMotion
+        # приложение русское: без этого системные надписи внутри него (поиск «Нет результатов», меню
+        # «Вставить», «Загрузка…» в просмотре файла, тексты ошибок сети) были английскими
+        CFBundleDevelopmentRegion: ru
+        CFBundleLocalizations: [ru]
+        # быстрые действия по долгому нажатию на иконку; разбирает SceneDelegate (Extras.swift)
+        UIApplicationShortcutItems:
+          - UIApplicationShortcutItemType: entry
+            UIApplicationShortcutItemTitle: Новая запись
+            UIApplicationShortcutItemIconSymbolName: plus
+          - UIApplicationShortcutItemType: cart
+            UIApplicationShortcutItemTitle: Выдать картридж
+            UIApplicationShortcutItemIconSymbolName: printer.fill
+          - UIApplicationShortcutItemType: find
+            UIApplicationShortcutItemTitle: Найти сотрудника
+            UIApplicationShortcutItemIconSymbolName: magnifyingglass
+          - UIApplicationShortcutItemType: mail
+            UIApplicationShortcutItemTitle: Отправить отчёт
+            UIApplicationShortcutItemIconSymbolName: envelope.fill
+    settings:
+      base:
+        # Бесплатный Apple ID даёт 10 новых App ID в неделю, а этот App ID в SideStore уже создан
+        # (YouTube Music удалён), поэтому SideStore ставит ITtool без нового App ID.
+        # shortcut: чужой bundle ID, вернуть свой bundle ID при платном аккаунте или свободном лимите.
+        PRODUCT_BUNDLE_IDENTIFIER: com.google.ios.youtubemusic
+        MARKETING_VERSION: "5.0"
+        CURRENT_PROJECT_VERSION: "10"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: REPORTER
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        TARGETED_DEVICE_FAMILY: "1"
+    scheme:
+      testTargets: [ITtoolUITests]
+  # проход по интерфейсу в симуляторе (CI, задача ui): нажатия, проверки и скриншоты всех экранов
+  ITtoolUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: ITtool
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.reporter.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: ITtool
+        TARGETED_DEVICE_FAMILY: "1"

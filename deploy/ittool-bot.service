@@ -1,0 +1,14 @@
+# Телеграм-бот ITtool (записи в отчёт с телефона). Ставится deploy/install.sh.
+[Unit]
+Description=ITtool: телеграм-бот отчёта
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/ITtool/ittool bot
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
