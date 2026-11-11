@@ -128,10 +128,10 @@ jobs:
           REC=$!
           sleep 2
           xcrun simctl launch "$UDID" com.google.ios.youtubemusic -AppleLanguages "(ru)" -AppleLocale ru_RU || true
-          sleep 8
+          sleep 20                       # медленная машина: запуск бывает дольше 8 с
           kill -INT $REC || true
           wait $REC || true
-          swift Checks/splash_frames.swift "$RUNNER_TEMP/splash.mp4" "$RUNNER_TEMP/screens/splash-sheet.png" 2.0 0.25 32 || true
+          swift Checks/splash_frames.swift "$RUNNER_TEMP/splash.mp4" "$RUNNER_TEMP/screens/splash-sheet.png" 2.0 0.4 48 || true
 
       - name: Collect screenshots
         if: always()
