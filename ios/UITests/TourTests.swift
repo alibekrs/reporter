@@ -691,8 +691,14 @@ final class Tour {
             XCTFail("вкладка «\(title)» не нажимается")
             return
         }
+        // медленный симулятор: первая страница строится долго, а первое касание после запуска иногда теряется
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"), object: t)
         t.tap()
-        pause(1.2)
+        if XCTWaiter.wait(for: [selected], timeout: 6) != .completed {
+            t.tap()
+            _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"), object: t)], timeout: 6)
+        }
+        pause(0.6)
         XCTAssertTrue(t.isSelected, "вкладка «\(title)» не выбралась")
     }
 
