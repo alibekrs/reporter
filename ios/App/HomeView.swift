@@ -1,6 +1,8 @@
 import SwiftUI
 
 /// Главная: цитата дня, неделя отчёта, картриджи и сотрудники, быстрые кнопки.
+/// Стекло здесь без .interactive(): страницы лежат в одной ленте, и интерактивное стекло главной забирало
+/// короткие касания на других страницах в тех же местах экрана (переключатели настроек не нажимались).
 struct HomeView: View {
     @EnvironmentObject private var store: Store
     @Binding var tab: AppTab
@@ -65,7 +67,7 @@ struct HomeView: View {
                     Spacer(minLength: 0)
                 }
                 .padding(14)
-                .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
             }
             .buttonStyle(PressStyle())
         }
@@ -81,7 +83,7 @@ struct HomeView: View {
                 Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.secondary)
             }
             .padding(.horizontal, 14).padding(.vertical, 11)
-            .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
         .buttonStyle(PressStyle())
         .accessibilityLabel("Сводка за месяц и год")
@@ -133,7 +135,7 @@ struct HomeView: View {
                     .padding(10)
                     .allowsHitTesting(false)
             }
-            .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
         .buttonStyle(PressStyle())
         .sensoryFeedback(.selection, trigger: quote)
@@ -266,7 +268,7 @@ private struct HomeTile: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
-            .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
         .buttonStyle(PressStyle())
     }
@@ -291,7 +293,7 @@ private struct QuickButton: View {
                     .foregroundStyle(ink)
                     .symbolEffect(.bounce, value: taps)
                     .frame(width: 56, height: 56)
-                    .glassEffect(.regular.tint(color).interactive(), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .glassEffect(.regular.tint(color), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 Text(title).font(.caption).foregroundStyle(.primary).lineLimit(1).minimumScaleFactor(0.8)
             }
             .frame(maxWidth: .infinity)
