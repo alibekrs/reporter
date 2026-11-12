@@ -203,12 +203,14 @@ final class Tour {
             XCTFail("Отчёт: просмотр не открылся")
             return
         }
-        // Quick Look открывает Word не сразу (в симуляторе — десятки секунд): ждём, пока пропадёт «Загрузка…»
+        // Quick Look открывает Word не сразу (в симуляторе — десятки секунд, сначала пустой экран, потом «Загрузка…»):
+        // ждём текст документа
         let loading = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@ OR label BEGINSWITH %@",
                                                            "Загрузка", "Loading")).firstMatch
+        let text = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Ответственный")).firstMatch
         pause(6)
         let deadline = Date().addingTimeInterval(60)
-        while loading.exists && Date() < deadline { pause(2) }
+        while (loading.exists || !text.exists) && Date() < deadline { pause(2) }
         pause(1.5)
         shot("report-preview")
         XCTAssertFalse(loading.exists, "Просмотр: документ не открылся за минуту — висит «Загрузка…»")
