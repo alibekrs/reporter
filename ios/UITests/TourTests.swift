@@ -304,6 +304,7 @@ final class Tour {
             return
         }
         delete.tap()
+        if app.buttons["Вернуть"].waitForExistence(timeout: 3) { shot("undo-toast") }
         pause(7)                                              // плашка «Вернуть» ушла — остаётся только корзина
         open("Настройки")
         guard let bin = reveal(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Корзина")), fromTop: true,
@@ -543,10 +544,9 @@ final class Tour {
             return
         }
         // плашка висит шесть секунд, а медленный симулятор тратит на шаг по секунде: место кнопки запоминаем сразу
-        // и жмём по координате — без нового поиска и без обрыва теста, если плашка уже ушла. Что запись пропала,
-        // видно на снимке
+        // и жмём по координате — без нового поиска и без обрыва теста, если плашка уже ушла. Снимок плашки — в шаге
+        // корзины: здесь на него не хватало времени
         let spot = back.frame
-        shot("undo-toast")
         app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: spot.midX, dy: spot.midY)).tap()
         pause(1)
         XCTAssertNotNil(visible(rows), "Отчёт: «Вернуть» не вернула удалённую запись")

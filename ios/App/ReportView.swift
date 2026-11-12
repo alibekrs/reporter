@@ -94,11 +94,13 @@ struct ReportView: View {
         Button { editing = e } label: { EntryRow(e: e, dated: dated) }.tint(.primary)
             .contextMenu {
                 Button {
-                    templating = EntryTemplate("", "", e.description ?? "", e.actions ?? "", e.result ?? "")
+                    afterMenu { templating = EntryTemplate("", "", e.description ?? "", e.actions ?? "", e.result ?? "") }
                 } label: { Label("Сохранить как шаблон", systemImage: "text.badge.plus") }
                 Button(role: .destructive) {
-                    store.deleteEntries([e.uid])
-                    toast = Toast.deleted
+                    afterMenu {
+                        store.deleteEntries([e.uid])
+                        toast = Toast.deleted
+                    }
                 } label: { Label("Удалить", systemImage: "trash") }
             }
     }
@@ -416,7 +418,7 @@ struct TemplatesView: View {
                         .deleteDisabled(fixed)
                         .contextMenu {
                             if !fixed {
-                                Button(role: .destructive) { delete([t.id]) } label: {
+                                Button(role: .destructive) { afterMenu { delete([t.id]) } } label: {
                                     Label("Удалить", systemImage: "trash")
                                 }
                             }
