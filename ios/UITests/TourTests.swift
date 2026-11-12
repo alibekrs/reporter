@@ -325,7 +325,8 @@ final class Tour {
         XCTAssertNotNil(reveal(rows, fromTop: true, tries: 8), "Отчёт: запись из корзины не вернулась")
     }
 
-    /// Вход по Face ID: в симуляторе нет ни Face ID, ни кода-пароля — приложение объясняет, почему не включить.
+    /// Вход по Face ID: в симуляторе подтвердить вход нечем — переключатель не включается, а приложение объясняет
+    /// почему (или система спрашивает код-пароль — его окно закрываем, и переключатель тоже остаётся выключенным).
     private func security() {
         tidy()
         open("Настройки")
@@ -334,23 +335,26 @@ final class Tour {
             XCTFail("Настройки: нет переключателя «Вход по Face ID»")
             return
         }
-        flip(toggle, "faceid")
+        pause(1.2)
+        // одно нажатие подольше: второе запустило бы проверку ещё раз, и окно кода-пароля осталось бы висеть
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).press(forDuration: 0.25)
         let alert = app.alerts.firstMatch
         if alert.waitForExistence(timeout: 8) {
             print("РАЗБОР Face ID: " + alert.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | "))
             shot("faceid-unavailable")
             alert.buttons.firstMatch.tap()
         } else {
-            // в симуляторе оказался код-пароль: системное окно проверки — отменяем, переключатель не должен включиться
-            print("РАЗБОР Face ID: окна «не настроено» нет — отменяем системную проверку")
+            // системное окно «Enter iPhone Passcode» живёт в другом процессе, кнопок его XCUITest не видит —
+            // закрываем крестиком слева вверху по координате
+            print("РАЗБОР Face ID: система спросила код-пароль — закрываем окно")
             shot("faceid-prompt")
-            let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-            for label in ["Cancel", "Отменить", "Отмена"] where board.buttons[label].exists {
-                board.buttons[label].tap()
-                break
-            }
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 41, dy: 101)).tap()
+            pause(1.5)
+            if alert.waitForExistence(timeout: 3) { alert.buttons.firstMatch.tap() }
         }
         pause(1)
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5) && toggle.isHittable,
+                      "Защита: после проверки входа настройки остались закрыты системным окном")
         XCTAssertEqual(toggle.value as? String, "0", "Защита: вход по Face ID включился без проверки")
     }
 
