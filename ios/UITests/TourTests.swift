@@ -786,13 +786,84 @@ final class Tour {
         }
     }
 
-    /// Переключатели «Настроек» разными нажатиями: что срабатывает, а что нет, и что лежит на экране.
+    /// Пятничное напоминание по этапам: сразу, после листа «Подразделения», после карточки отдела в нём,
+    /// после смены страницы. Нажатие не дошло — в разбор дерево элементов.
     func toggles() {
         launch()
         pause(6)                                             // заставка доигрывает
         open("Настройки")
         pause(1)
-        print("РАЗБОР дерево настроек ↓\n" + app.debugDescription + "\nРАЗБОР дерево настроек ↑")
+        stageToggle("сразу после запуска")
+        unitsSheet(card: false)
+        stageToggle("после листа «Подразделения»")
+        unitsSheet(card: true)
+        stageToggle("после карточки отдела в листе")
+        open("Главная")
+        open("Настройки")
+        stageToggle("после смены страницы")
+        legacyToggles()
+    }
+
+    /// Открыть и закрыть «Подразделения» (card — зайти в карточку «Филиал» и вернуться).
+    private func unitsSheet(card: Bool) {
+        guard let row = reveal(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Подразделения")),
+                               fromTop: true, tries: 10) else {
+            print("РАЗБОР лист: нет строки «Подразделения»")
+            return
+        }
+        row.tap()
+        guard app.navigationBars["Подразделения"].waitForExistence(timeout: 5) else {
+            print("РАЗБОР лист: «Подразделения» не открылись")
+            return
+        }
+        pause(0.8)
+        if card {
+            tapFirst(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Филиал")), "строка «Филиал»")
+            if app.navigationBars["Филиал"].waitForExistence(timeout: 5) {
+                pause(0.8)
+                app.navigationBars["Филиал"].buttons.element(boundBy: 0).tap()
+                pause(1)
+            } else {
+                print("РАЗБОР лист: карточка отдела не открылась")
+            }
+        }
+        tapBarButton("Подразделения", "Закрыть")
+        pause(1.5)
+    }
+
+    private func stageToggle(_ stage: String) {
+        let q = app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "Напомнить в пятницу"))
+        guard let t = reveal(q, fromTop: true, tries: 6) else {
+            print("РАЗБОР \(stage): переключателя не видно")
+            return
+        }
+        pause(1.5)
+        let before = t.value as? String
+        let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        func allowIfAsked() {
+            for label in ["Allow", "Разрешить"] where board.buttons[label].waitForExistence(timeout: 2) {
+                board.buttons[label].tap()
+                pause(1)
+                return
+            }
+        }
+        t.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        pause(1.2)
+        allowIfAsked()
+        let now = t.value as? String
+        print("РАЗБОР \(stage): было \(before ?? "?"), стало \(now ?? "?")")
+        shot("stage-" + stage.prefix(12))
+        if now == before {
+            print("РАЗБОР дерево (\(stage)) ↓\n" + app.debugDescription + "\nРАЗБОР дерево ↑")
+        } else {
+            t.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()      // как было
+            pause(1.2)
+            print("РАЗБОР \(stage): обратно → \((t.value as? String) ?? "?")")
+        }
+    }
+
+    /// Прежний разбор: каким нажатием срабатывают переключатели.
+    private func legacyToggles() {
         for name in ["Шифровать бэкап", "Напомнить в пятницу"] {
             guard let t = reveal(app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", name)), fromTop: true,
                                  tries: 14) else {
