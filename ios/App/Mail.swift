@@ -103,8 +103,23 @@ extension String {
     var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) }
 }
 
+/// Письмо с ключом восстановления (PIN-код и зашифрованный бэкап): уходит с почты для отчёта.
+enum KeyMail {
+    static let subject = "REPORTER: ключ восстановления"
+
+    static func message(from: String, to: String, key: String) -> String {
+        let text = "Ключ восстановления REPORTER:\n\n" + RecoveryKey.pretty(key) + "\n\n"
+            + "Он нужен, если забудете PIN-код входа: на экране входа нажмите «Забыли PIN-код?» и введите ключ.\n"
+            + "Этот же ключ открывает зашифрованный бэкап вместо пароля — например, на новом телефоне.\n\n"
+            + "Сохраните это письмо и никому его не пересылайте. Если вы не включали защиту в REPORTER, удалите его."
+        return MIME.message(from: from, to: to, subject: subject, text: text)
+    }
+}
+
 enum MIME {
-    static func message(from: String, to: String, subject: String, text: String, attachment: Data, fileName: String) -> String {
+    /// Без вложения — одна текстовая часть.
+    static func message(from: String, to: String, subject: String, text: String, attachment: Data? = nil,
+                        fileName: String = "") -> String {
         let boundary = "ittool-\(UUID().uuidString)"
         let date = DateFormatter()
         date.locale = Locale(identifier: "en_US_POSIX")
@@ -121,6 +136,7 @@ enum MIME {
         m += "MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"\(boundary)\"\r\n\r\n"
         m += "--\(boundary)\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n"
         m += Data(text.utf8).base64EncodedString(options: [.lineLength76Characters, .endLineWithCarriageReturn, .endLineWithLineFeed])
+        guard let attachment else { return m + "\r\n--\(boundary)--\r\n" }
         m += "\r\n--\(boundary)\r\n"
         m += "Content-Type: \(docType); name*=UTF-8''\(encodedName)\r\n"
         m += "Content-Disposition: attachment; filename*=UTF-8''\(encodedName)\r\n"

@@ -30,6 +30,11 @@ final class Tour {
     }()
 
     private static let tabs = ["Главная", "Учёт", "Отчёт", "Картриджи", "Настройки"]
+    // вход (security): ключ «из письма» задаёт тест — письмо в симуляторе не уходит
+    private static let testKey = "ABCD-EFGH-JKLM"
+    private static let typedKey = "abcd efgh jklm"         // как набрал бы человек: строчными, с пробелами
+    private static let firstPIN = "1234"
+    private static let pin = "2580"                         // после «Забыли PIN-код?»
     private static let withAdd: Set = ["Учёт", "Отчёт", "Картриджи"]
 
     init(_ test: XCTestCase, _ name: String) {
@@ -325,37 +330,186 @@ final class Tour {
         XCTAssertNotNil(reveal(rows, fromTop: true, tries: 8), "Отчёт: запись из корзины не вернулась")
     }
 
-    /// Вход по Face ID: в симуляторе подтвердить вход нечем — переключатель не включается, а приложение объясняет
-    /// почему (или система спрашивает код-пароль — его окно закрываем, и переключатель тоже остаётся выключенным).
+    /// Вход по PIN-коду (5.2): PIN-код дважды, почта для восстановления и ключ из письма (письмо в симуляторе
+    /// не уходит — ключ задаёт тест через REPORTER_TEST_KEY), экран входа после сворачивания (в переключателе
+    /// приложений — без кнопок), неверный и верный PIN-код, «Забыли PIN-код?» — ключ из письма и новый PIN-код.
     private func security() {
         tidy()
         open("Настройки")
-        guard let toggle = reveal(app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "Вход по Face ID")),
-                                  fromTop: true, tries: 10) else {
-            XCTFail("Настройки: нет переключателя «Вход по Face ID»")
+        let q = app.switches.matching(NSPredicate(format: "identifier == %@ OR label BEGINSWITH %@", "lock.toggle", "Вход по"))
+        guard let toggle = reveal(q, fromTop: true, tries: 10) else {
+            XCTFail("Настройки: нет переключателя входа")
             return
         }
         pause(1.2)
-        // одно нажатие подольше: второе запустило бы проверку ещё раз, и окно кода-пароля осталось бы висеть
-        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).press(forDuration: 0.25)
-        let alert = app.alerts.firstMatch
-        if alert.waitForExistence(timeout: 8) {
-            print("РАЗБОР Face ID: " + alert.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | "))
-            shot("faceid-unavailable")
-            alert.buttons.firstMatch.tap()
-        } else {
-            // системное окно «Enter iPhone Passcode» живёт в другом процессе, кнопок его XCUITest не видит —
-            // закрываем крестиком слева вверху по координате
-            print("РАЗБОР Face ID: система спросила код-пароль — закрываем окно")
-            shot("faceid-prompt")
-            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 41, dy: 101)).tap()
-            pause(1.5)
-            if alert.waitForExistence(timeout: 3) { alert.buttons.firstMatch.tap() }
+        let create = app.staticTexts["Придумайте PIN-код"]
+        let at = toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5))
+        at.tap()
+        if !create.waitForExistence(timeout: 4) {
+            print("РАЗБОР вход: касание переключателя потерялось — нажимаем подольше")
+            at.press(forDuration: 0.25)
         }
+        guard create.waitForExistence(timeout: 4) else {
+            XCTFail("Защита: переключатель не открыл настройку PIN-кода")
+            shot("lock-setup-missing")
+            return
+        }
+        shot("lock-setup-pin")
+        enterPIN(Self.firstPIN)
+        guard app.staticTexts["Повторите PIN-код"].waitForExistence(timeout: 4) else {
+            XCTFail("Защита: после PIN-кода не спросили повторить")
+            tidy()
+            return
+        }
+        enterPIN(Self.firstPIN)
+        let send = app.buttons["Отправить ключ"]
+        guard send.waitForExistence(timeout: 4) else {
+            XCTFail("Защита: после PIN-кода нет шага с почтой для восстановления")
+            shot("lock-mail-missing")
+            tidy()
+            return
+        }
+        // поле уже заполнено адресом из «Почты для отчёта», если он там есть
+        if !((app.textFields["Почта"].value as? String) ?? "").contains("@") {
+            type("Почта", "it@example.com")
+            hideKeyboard()
+        }
+        send.tap()
+        guard app.textFields["Ключ из письма"].waitForExistence(timeout: 6) else {
+            XCTFail("Защита: ключ не «отправился»")
+            shot("lock-key-missing")
+            tidy()
+            return
+        }
+        type("Ключ из письма", Self.typedKey)                // строчными и с пробелами — ключ всё равно подходит
+        hideKeyboard()
+        shot("lock-setup-key")
+        app.buttons["Подтвердить ключ"].tap()
+        pause(1.5)
+        XCTAssertEqual(toggle.value as? String, "1", "Защита: вход не включился после PIN-кода и ключа")
+        shot("lock-on")
+
+        // свернули: в переключателе приложений — только значок; вернулись — экран входа
+        XCUIDevice.shared.press(.home)
+        pause(2)
+        switcher()
+        app.activate()
+        let enter = app.buttons["Ввести PIN-код"]
+        guard enter.waitForExistence(timeout: 8) else {
+            XCTFail("Защита: после сворачивания нет экрана входа")
+            shot("lock-missing")
+            return
+        }
+        pause(0.8)
+        shot("lock-screen")
+        XCTAssertTrue(app.buttons["Забыли PIN-код?"].exists, "Экран входа: нет «Забыли PIN-код?»")
+        let faceID = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Войти по")).firstMatch.exists
+        print("РАЗБОР вход: кнопка Face ID " + (faceID ? "есть" : "не показана — в симуляторе нет Face ID"))
+        enter.tap()
+        enterPIN("9999")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Неверный PIN-код")).firstMatch
+            .waitForExistence(timeout: 3), "Экран входа: неверный PIN-код не отклонён")
+        shot("lock-wrong-pin")
+        enterPIN(Self.firstPIN)
+        XCTAssertTrue(app.staticTexts["Введите PIN-код"].waitForNonExistence(timeout: 4),
+                      "Экран входа: верный PIN-код не открыл приложение")
+        XCTAssertTrue(toggle.waitForExistence(timeout: 3) && toggle.isHittable, "Защита: после входа настройки закрыты")
+
+        // забыли PIN-код: ключ из письма → новый PIN-код дважды → вход
+        XCUIDevice.shared.press(.home)
+        pause(1.5)
+        app.activate()
+        let forgot = app.buttons["Забыли PIN-код?"]
+        guard forgot.waitForExistence(timeout: 8) else {
+            XCTFail("Защита: после второго сворачивания нет экрана входа")
+            return
+        }
+        pause(0.8)
+        forgot.tap()
+        guard app.textFields["Ключ из письма"].waitForExistence(timeout: 4) else {
+            XCTFail("Восстановление: нет поля для ключа")
+            shot("lock-forgot-missing")
+            return
+        }
+        type("Ключ из письма", Self.typedKey)
+        shot("lock-forgot")
+        app.typeText("\n")                                   // «Продолжить» — кнопкой клавиатуры
+        guard app.staticTexts["Придумайте новый PIN-код"].waitForExistence(timeout: 4) else {
+            XCTFail("Восстановление: ключ из письма не принят")
+            shot("lock-key-rejected")
+            return
+        }
+        shot("lock-new-pin")
+        enterPIN(Self.pin)
+        XCTAssertTrue(app.staticTexts["Повторите PIN-код"].waitForExistence(timeout: 3), "Восстановление: не спросили повторить")
+        enterPIN(Self.pin)
+        XCTAssertTrue(app.staticTexts["Повторите PIN-код"].waitForNonExistence(timeout: 4),
+                      "Восстановление: новый PIN-код не открыл приложение")
         pause(1)
-        XCTAssertTrue(toggle.waitForExistence(timeout: 5) && toggle.isHittable,
-                      "Защита: после проверки входа настройки остались закрыты системным окном")
-        XCTAssertEqual(toggle.value as? String, "0", "Защита: вход по Face ID включился без проверки")
+        XCTAssertTrue(toggle.isHittable, "Восстановление: после нового PIN-кода приложение закрыто")
+    }
+
+    /// Набрать PIN-код цифрами экрана. Точка после касания не закрасилась — повторяем нажатием подольше
+    /// (на медленном симуляторе короткие касания иногда теряются).
+    private func enterPIN(_ pin: String) {
+        let dots = app.descendants(matching: .any)["pin.dots"]
+        for (i, d) in pin.enumerated() {
+            let key = app.buttons["pin.\(d)"]
+            guard key.waitForExistence(timeout: 4) else {
+                XCTFail("Нет цифры «\(d)» для PIN-кода")
+                shot("pin-missing")
+                return
+            }
+            key.tap()
+            guard i < pin.count - 1 else { break }          // после последней точки сразу гаснут — идёт проверка
+            let want = "\(i + 1) из \(pin.count)"
+            if dots.exists, !waitValue(dots, want, timeout: 3) {
+                print("РАЗБОР PIN: касание «\(d)» потерялось — нажимаем подольше")
+                key.press(forDuration: 0.25)
+                _ = waitValue(dots, want, timeout: 3)
+            }
+        }
+        pause(1)                                             // проверка после последней цифры
+    }
+
+    private func waitValue(_ e: XCUIElement, _ value: String, timeout: Double) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if (e.value as? String) == value { return true }
+            pause(0.2)
+        } while Date() < deadline
+        return false
+    }
+
+    /// Экран входа (вход включён шагом security) — открыть PIN-кодом. Экрана нет — ничего не делаем.
+    private func unlock(_ shotName: String? = nil, wait: Double = 6) {
+        let enter = app.buttons["Ввести PIN-код"]
+        guard enter.waitForExistence(timeout: wait) else { return }
+        pause(0.8)
+        if let shotName { shot(shotName) }
+        enter.tap()
+        let title = app.staticTexts["Введите PIN-код"]
+        guard title.waitForExistence(timeout: 4) else {
+            XCTFail("Вход: «Ввести PIN-код» не открыл цифры")
+            shot("unlock-stuck")
+            return
+        }
+        enterPIN(Self.pin)
+        if title.waitForNonExistence(timeout: 4) { return }
+        // «Забыли PIN-код?» в шаге security не прошёл — тогда действует первый PIN-код
+        print("РАЗБОР вход: PIN-код \(Self.pin) не подошёл, пробуем \(Self.firstPIN)")
+        enterPIN(Self.firstPIN)
+        XCTAssertTrue(title.waitForNonExistence(timeout: 4), "Вход: ни один PIN-код не подошёл")
+    }
+
+    /// Переключатель приложений (смахнуть вверх от нижнего края и задержать палец): что видно о приложении в фоне.
+    private func switcher() {
+        let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let from = board.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.998))
+        let to = board.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.62))
+        from.press(forDuration: 0.1, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 1.2)
+        pause(1.5)
+        shot("lock-switcher")
     }
 
     /// Бэкап: «каждый день», шифрование с паролем, проверка без отправленного бэкапа — понятный ответ.
@@ -757,6 +911,7 @@ final class Tour {
         }
         shot("icon-menu")
         item.tap()
+        unlock("icon-lock")                                  // вход включён шагом security: сначала экран входа
         XCTAssertTrue(app.navigationBars["Новая запись"].waitForExistence(timeout: 8),
                       "Иконка: «Новая запись» не открыла форму записи")
         shot("icon-entry")
@@ -773,6 +928,7 @@ final class Tour {
             return
         }
         cart.tap()
+        unlock(wait: 10)
         XCTAssertTrue(app.navigationBars["Выдача"].waitForExistence(timeout: 12),
                       "Иконка: «Выдать картридж» при закрытом приложении не открыла форму выдачи")
         shot("icon-cold")
@@ -790,7 +946,9 @@ final class Tour {
 
     func light() {
         launch()
-        pause(6)                                             // заставка доигрывает
+        // вход включён первым проходом: заставки нет, сразу экран входа; нет входа — за это время доиграет заставка
+        unlock("lock-launch", wait: 8)
+        pause(1.5)
         open("Настройки")
         tapFirst(app.buttons.matching(NSPredicate(format: "label == %@", "Светлая")), "сегмент «Светлая»")
         pause(1)
@@ -1165,6 +1323,7 @@ final class Tour {
 
     private func launch() {
         app.launchArguments = ["-AppleLanguages", "(ru)", "-AppleLocale", "ru_RU"]
+        app.launchEnvironment["REPORTER_TEST_KEY"] = Self.testKey
         app.launch()
     }
 

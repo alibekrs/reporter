@@ -16,7 +16,7 @@ targets:
         # «Вставить», «Загрузка…» в просмотре файла, тексты ошибок сети) были английскими
         CFBundleDevelopmentRegion: ru
         CFBundleLocalizations: [ru]
-        # без этой строки iOS не даёт приложению спросить Face ID (Настройки → «Вход по Face ID»)
+        # без этой строки iOS не даёт приложению спросить Face ID (Настройки → «Вход по Face ID и PIN-коду»)
         NSFaceIDUsageDescription: Вход в REPORTER по Face ID
         # быстрые действия по долгому нажатию на иконку; разбирает SceneDelegate (Extras.swift)
         UIApplicationShortcutItems:
@@ -38,14 +38,18 @@ targets:
         # (YouTube Music удалён), поэтому SideStore ставит ITtool без нового App ID.
         # shortcut: чужой bundle ID, вернуть свой bundle ID при платном аккаунте или свободном лимите.
         PRODUCT_BUNDLE_IDENTIFIER: com.google.ios.youtubemusic
-        MARKETING_VERSION: "5.1"
-        CURRENT_PROJECT_VERSION: "11"
+        MARKETING_VERSION: "5.2"
+        CURRENT_PROJECT_VERSION: "12"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: REPORTER
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         TARGETED_DEVICE_FAMILY: "1"
+      configs:
+        # #if DEBUG — только в сборке для прохода по интерфейсу (ключ восстановления задаёт тест); в IPA (Release) нет
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
     scheme:
       testTargets: [ITtoolUITests]
   # проход по интерфейсу в симуляторе (CI, задача ui): нажатия, проверки и скриншоты всех экранов

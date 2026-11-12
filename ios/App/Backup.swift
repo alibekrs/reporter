@@ -264,51 +264,97 @@ enum Xlsx {
     }
 }
 
-/// Шифрование бэкапа паролем: AES-GCM, ключ из пароля через PBKDF2. Расшифровать может только приложение
-/// (или тот, кто знает пароль и формат): в начале файла — метка, соль и число раундов, дальше шифротекст.
+//// Шифрование бэкапа: AES-GCM. Данные заперты случайным ключом, а сам ключ лежит в файле несколько раз —
+/// запертый паролем бэкапа и ключом восстановления из письма (PBKDF2): открыть файл можно любым из них.
+/// Формат 2: метка, число раундов PBKDF2, число замков, замки (соль 16 байт + запертый ключ 60), данные.
+/// Формат 1 (REPORTER 5.1: метка, соль, раунды, данные — только пароль) по-прежнему читается.
 enum BackupCrypto {
     static let passwordKey = "backup.password"
-    private static let magic = Data("REPORTER-ENC1\n".utf8)
+    private static let magic = Data("REPORTER-ENC2\n".utf8)
+    private static let magic1 = Data("REPORTER-ENC1\n".utf8)
     private static let rounds: UInt32 = 200_000
+    private static let lockSize = 16 + 60                 // соль + ключ под AES-GCM (12 nonce + 32 + 16 tag)
+    private static let damaged = APIError(message: "Файл бэкапа повреждён.")
+    private static let wrong = APIError(message: "Ни пароль бэкапа, ни ключ из письма не подходят — или файл повреждён.")
 
-    static func isEncrypted(_ data: Data) -> Bool { data.starts(with: magic) }
+    static func isEncrypted(_ data: Data) -> Bool { data.starts(with: magic) || data.starts(with: magic1) }
 
-    static func encrypt(_ plain: Data, password: String) throws -> Data {
-        var salt = [UInt8](repeating: 0, count: 16)
-        guard SecRandomCopyBytes(kSecRandomDefault, salt.count, &salt) == errSecSuccess else {
-            throw APIError(message: "Не получилось зашифровать бэкап.")
+    /// Пустые секреты пропускаются (ключа восстановления может не быть).
+    static func encrypt(_ plain: Data, secrets: [String]) throws -> Data {
+        let secrets = secrets.filter { !$0.isEmpty }
+        guard !secrets.isEmpty else { throw APIError(message: "Пароль бэкапа не задан.") }
+        let key = SymmetricKey(size: .bits256)
+        var out = magic
+        withUnsafeBytes(of: rounds.bigEndian) { out.append(contentsOf: $0) }
+        out.append(UInt8(secrets.count))
+        for s in secrets {
+            var salt = [UInt8](repeating: 0, count: 16)
+            guard SecRandomCopyBytes(kSecRandomDefault, salt.count, &salt) == errSecSuccess,
+                  let lock = try AES.GCM.seal(key.withUnsafeBytes { Data($0) }, using: derive(s, Data(salt), rounds)).combined
+            else { throw APIError(message: "Не получилось зашифровать бэкап.") }
+            out.append(contentsOf: salt)
+            out.append(lock)
         }
-        let key = try derive(password, Data(salt), rounds)
         guard let sealed = try AES.GCM.seal(plain, using: key).combined else {
             throw APIError(message: "Не получилось зашифровать бэкап.")
         }
-        var out = magic
-        out.append(contentsOf: salt)
-        withUnsafeBytes(of: rounds.bigEndian) { out.append(contentsOf: $0) }
         out.append(sealed)
         return out
     }
 
-    static func decrypt(_ input: Data, password: String) throws -> Data {
+    /// Каждый секрет пробуется как есть, а похожий на ключ восстановления — ещё и как ключ (заглавные, без дефисов).
+    static func decrypt(_ input: Data, secrets: [String]) throws -> Data {
         let data = Data(input)                    // индексы с нуля, даже если пришёл кусок другого Data
-        let head = magic.count, body = head + 16 + 4
-        guard isEncrypted(data), data.count > body + 28 else {
-            throw APIError(message: "Файл бэкапа повреждён.")
+        var tries: [String] = []
+        for s in secrets where !s.isEmpty {
+            for t in RecoveryKey.looksLike(s) ? [s, RecoveryKey.normalize(s)] : [s] where !tries.contains(t) {
+                tries.append(t)
+            }
         }
-        let salt = data.subdata(in: head..<(head + 16))
-        let r = data.subdata(in: (head + 16)..<body).reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
-        do {
-            let box = try AES.GCM.SealedBox(combined: data.subdata(in: body..<data.count))
-            return try AES.GCM.open(box, using: derive(password, salt, r))
-        } catch {
-            throw APIError(message: "Пароль бэкапа не подходит, или файл повреждён.")
+        guard !tries.isEmpty else { throw APIError(message: "Пароль бэкапа не задан.") }
+        if data.starts(with: magic1) { return try decrypt1(data, tries) }
+        let head = magic.count + 5
+        guard data.starts(with: magic), data.count > head else { throw damaged }
+        let r = data.subdata(in: magic.count..<(magic.count + 4)).reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
+        let n = Int(data[magic.count + 4])
+        let body = head + n * lockSize
+        // файл приходит извне: раунды и замки ограничены, чтобы чужой файл не повесил приложение
+        guard (1...5_000_000).contains(r), (1...4).contains(n), data.count > body + 28 else { throw damaged }
+        for i in 0..<n {
+            let at = head + i * lockSize
+            let salt = data.subdata(in: at..<(at + 16))
+            guard let box = try? AES.GCM.SealedBox(combined: data.subdata(in: (at + 16)..<(at + lockSize))) else {
+                throw damaged
+            }
+            for t in tries {
+                guard let raw = try? AES.GCM.open(box, using: derive(t, salt, r)) else { continue }
+                do {
+                    return try AES.GCM.open(AES.GCM.SealedBox(combined: data.subdata(in: body..<data.count)),
+                                            using: SymmetricKey(data: raw))
+                } catch { throw damaged }
+            }
         }
+        throw wrong
     }
 
-    private static func derive(_ password: String, _ salt: Data, _ rounds: UInt32) throws -> SymmetricKey {
-        guard !password.isEmpty, rounds > 0 else { throw APIError(message: "Пароль бэкапа не задан.") }
+    private static func decrypt1(_ data: Data, _ tries: [String]) throws -> Data {
+        let head = magic1.count, body = head + 16 + 4
+        guard data.count > body + 28 else { throw damaged }
+        let salt = data.subdata(in: head..<(head + 16))
+        let r = data.subdata(in: (head + 16)..<body).reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
+        guard (1...5_000_000).contains(r),
+              let box = try? AES.GCM.SealedBox(combined: data.subdata(in: body..<data.count)) else { throw damaged }
+        for t in tries {
+            if let plain = try? AES.GCM.open(box, using: derive(t, salt, r)) { return plain }
+        }
+        throw wrong
+    }
+
+    /// Ключ из секрета (PBKDF2-SHA256). Не private: самопроверка собирает им файл старого формата.
+    static func derive(_ secret: String, _ salt: Data, _ rounds: UInt32) throws -> SymmetricKey {
+        guard !secret.isEmpty, rounds > 0 else { throw APIError(message: "Пароль бэкапа не задан.") }
         var key = [UInt8](repeating: 0, count: 32)
-        let pw = Array(password.utf8).map { CChar(bitPattern: $0) }
+        let pw = Array(secret.utf8).map { CChar(bitPattern: $0) }
         let status = key.withUnsafeMutableBufferPointer { k in
             salt.withUnsafeBytes { s in
                 CCKeyDerivationPBKDF(CCPBKDFAlgorithm(kCCPBKDF2), pw, pw.count,
@@ -321,7 +367,59 @@ enum BackupCrypto {
     }
 }
 
-/// Отправка файла в телеграм-группу через бота (Bot API sendDocument) и чтение его обратно (getFile).
+/// Ключ восстановления: приходит письмом, сбрасывает забытый PIN-код и открывает зашифрованный бэкап вместо пароля.
+/// В связке ключей лежит без дефисов («K7QF29XM3PLD»), в письме — по четыре знака («K7QF-29XM-3PLD»).
+enum RecoveryKey {
+    static let keychain = "lock.recovery"
+    /// Без 0/O и 1/I — в письме не перепутать. 32 знака: 12 знаков ключа — 60 бит.
+    private static let letters = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+    /// Русские буквы-двойники латинских: ключ набрали в русской раскладке.
+    private static let twins: [Character: Character] = ["А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H",
+                                                        "О": "O", "Р": "P", "С": "C", "Т": "T", "У": "Y", "Х": "X"]
+
+    static func make() -> String {
+        pretty(String((0..<12).map { _ in letters.randomElement()! }))    // системный генератор — криптостойкий
+    }
+
+    /// Регистр, пробелы, дефисы и русские буквы-двойники не мешают.
+    static func normalize(_ s: String) -> String {
+        String(s.uppercased().compactMap { c -> Character? in
+            let t = twins[c] ?? c
+            return t.isLetter || t.isNumber ? t : nil
+        })
+    }
+
+    static func pretty(_ s: String) -> String {
+        let k = Array(normalize(s))
+        return stride(from: 0, to: k.count, by: 4).map { String(k[$0..<min($0 + 4, k.count)]) }.joined(separator: "-")
+    }
+
+    /// 12 знаков из алфавита ключей — значит, набрали ключ, а не пароль.
+    static func looksLike(_ s: String) -> Bool {
+        let k = normalize(s)
+        return k.count == 12 && k.allSatisfy(letters.contains)
+    }
+}
+
+/// PIN-код входа: в связке ключей — соль и хеш, самого кода нигде нет.
+enum PinCode {
+    static func seal(_ pin: String) -> String {
+        let salt = Data((0..<16).map { _ in UInt8.random(in: .min ... .max) })
+        return salt.base64EncodedString() + ":" + hash(pin, salt).base64EncodedString()
+    }
+
+    static func matches(_ pin: String, _ sealed: String) -> Bool {
+        let p = sealed.split(separator: ":")
+        guard p.count == 2, let salt = Data(base64Encoded: String(p[0])), let h = Data(base64Encoded: String(p[1])) else {
+            return false
+        }
+        return hash(pin, salt) == h
+    }
+
+    private static func hash(_ pin: String, _ salt: Data) -> Data { Data(SHA256.hash(data: salt + Data(pin.utf8))) }
+}
+
+// Отправка файла в телеграм-группу через бота (Bot API sendDocument) и чтение его обратно (getFile).
 enum Telegram {
     /// Возвращает file_id отправленного файла — по нему бэкап потом скачивается для проверки.
     @discardableResult

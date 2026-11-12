@@ -1282,11 +1282,14 @@ final class Store: ObservableObject {
             let json = try b.json()
             let fileId: String
             if state.backupEncrypt {
-                fileId = try await Telegram.send(token: state.backupToken, chat: state.backupChat,
-                                                 file: BackupCrypto.encrypt(json, password: password),
+                // замки паролем и ключом из письма: PBKDF2 на каждый — не в главном потоке, экран не замирает
+                let secrets = [password, Keychain.get(RecoveryKey.keychain)]
+                let sealed = try await Task.detached { try BackupCrypto.encrypt(json, secrets: secrets) }.value
+                fileId = try await Telegram.send(token: state.backupToken, chat: state.backupChat, file: sealed,
                                                  name: "REPORTER_бэкап_\(day).reporter", mime: "application/octet-stream",
                                                  caption: "REPORTER · бэкап \(b.exported_at ?? day), зашифрован\n\(b.stats)\n"
-                                                    + "Восстановить: Настройки → «Восстановить из бэкапа», нужен пароль бэкапа.")
+                                                    + "Восстановить: Настройки → «Восстановить из бэкапа», нужен пароль "
+                                                    + "бэкапа или ключ восстановления из письма.")
             } else {
                 try await Telegram.send(token: state.backupToken, chat: state.backupChat, file: Readable.xlsx(b),
                                         name: "REPORTER_бэкап_\(day).xlsx",
@@ -1319,7 +1322,8 @@ final class Store: ObservableObject {
         do {
             var data = try await Telegram.download(token: state.backupToken, fileId: state.backupFileId)
             if BackupCrypto.isEncrypted(data) {
-                data = try BackupCrypto.decrypt(data, password: Keychain.get(BackupCrypto.passwordKey))
+                let sealed = data, secrets = [Keychain.get(BackupCrypto.passwordKey), Keychain.get(RecoveryKey.keychain)]
+                data = try await Task.detached { try BackupCrypto.decrypt(sealed, secrets: secrets) }.value
             }
             let b = try BackupFile.read(data)
             state.checkOK = expected.isEmpty || b.stats == expected

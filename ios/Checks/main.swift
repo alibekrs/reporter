@@ -1,5 +1,6 @@
 // Самопроверка на macOS-раннере: настоящие Docx.swift и Mail.swift собирают Word за неделю
 // и письмо; check_mail.py открывает их python-docx и email-парсером.
+import CryptoKit
 import Foundation
 
 let dir = CommandLine.arguments[1]
@@ -18,7 +19,10 @@ let mail = MIME.message(from: "me@example.kz", to: "boss@example.kz",
                         text: "Здравствуйте!\n.точка в начале строки", attachment: docx,
                         fileName: Docx.fileName(monday: monday))
 try Data(mail.utf8).write(to: URL(fileURLWithPath: dir + "/mail.eml"))
-print("собрано: week.docx, mail.eml")
+// письмо с ключом восстановления: без вложения, ключ — по четыре знака
+let keyMail = KeyMail.message(from: "me@example.kz", to: "me@example.kz", key: "ABCDEFGHJKLM")
+try Data(keyMail.utf8).write(to: URL(fileURLWithPath: dir + "/key.eml"))
+print("собрано: week.docx, mail.eml, key.eml")
 
 // ── бэкап: JSON туда-обратно и Excel для чтения ─────────────────────────────
 let meta = try JSONDecoder().decode(Meta.self, from: Data(contentsOf: URL(fileURLWithPath: "App/meta.json")))
@@ -54,19 +58,51 @@ precondition((try? BackupFile.read(Data("{\"x\":1}".utf8))) == nil, "чужой 
 let old = try BackupFile.read(Data("{\"exported_at\":\"1\",\"units\":[],\"employees\":[],\"entries\":[],\"cartridges\":[],\"unsynced\":[]}".utf8))
 precondition(old.meta == nil && old.employees.isEmpty, "старый бэкап не читается")
 precondition(Xlsx.column(0) == "A" && Xlsx.column(25) == "Z" && Xlsx.column(26) == "AA", "буквы колонок")
-// ── шифрование бэкапа: туда-обратно, чужой пароль и порча не проходят ───────
-let sealed = try BackupCrypto.encrypt(json, password: "пароль-бэкапа 1")
+// ── ключ восстановления: 12 знаков без 0/O и 1/I, набирать можно как угодно ──
+let key = RecoveryKey.make()
+precondition(key.count == 14 && RecoveryKey.looksLike(key) && RecoveryKey.normalize(key).count == 12, "ключ: \(key)")
+precondition(RecoveryKey.make() != key, "ключ восстановления не случайный")
+precondition(RecoveryKey.normalize("abcd efgh-jkLM") == "ABCDEFGHJKLM", "ключ: регистр, пробелы, дефисы")
+precondition(RecoveryKey.normalize("АВСЕ-КМНР-ТХ23") == "ABCEKMHPTX23", "ключ: русские буквы-двойники")
+precondition(RecoveryKey.pretty("abcdefghjklm") == "ABCD-EFGH-JKLM", "ключ по четыре знака")
+precondition(!RecoveryKey.looksLike("пароль-бэкапа 1") && !RecoveryKey.looksLike("ABCD-EFGH-JKL0"), "пароль принят за ключ")
+// ── шифрование бэкапа: паролем или ключом из письма; чужое и порча не проходят ──
+let sealed = try BackupCrypto.encrypt(json, secrets: ["пароль-бэкапа 1", RecoveryKey.normalize(key)])
 precondition(BackupCrypto.isEncrypted(sealed) && !BackupCrypto.isEncrypted(json), "метка шифрования")
-let opened = try BackupCrypto.decrypt(sealed, password: "пароль-бэкапа 1")
-precondition(opened == json, "расшифровка вернула не то")
-precondition((try? BackupCrypto.decrypt(sealed, password: "пароль-бэкапа 2")) == nil, "чужой пароль подошёл")
+let byPassword = try BackupCrypto.decrypt(sealed, secrets: ["пароль-бэкапа 1"])
+precondition(byPassword == json, "расшифровка паролем вернула не то")
+// ключ набран строчными, с пробелами вместо дефисов — всё равно открывает
+let byKey = try BackupCrypto.decrypt(sealed, secrets: [key.lowercased().replacingOccurrences(of: "-", with: " ")])
+precondition(byKey == json, "ключ из письма не открыл бэкап")
+// как в приложении: свой пароль сменили, а ключ тот же
+let byStored = try BackupCrypto.decrypt(sealed, secrets: ["новый пароль 2", RecoveryKey.normalize(key)])
+precondition(byStored == json, "сохранённый ключ не открыл бэкап")
+precondition((try? BackupCrypto.decrypt(sealed, secrets: ["пароль-бэкапа 2"])) == nil, "чужой пароль подошёл")
+precondition((try? BackupCrypto.decrypt(sealed, secrets: [RecoveryKey.make()])) == nil, "чужой ключ подошёл")
+precondition((try? BackupCrypto.decrypt(sealed, secrets: [""])) == nil, "пустой пароль подошёл")
 var spoiled = sealed
 spoiled[spoiled.count - 1] ^= 0x01
-precondition((try? BackupCrypto.decrypt(spoiled, password: "пароль-бэкапа 1")) == nil, "испорченный файл прочитался")
-let again = try BackupCrypto.encrypt(json, password: "пароль-бэкапа 1")
+precondition((try? BackupCrypto.decrypt(spoiled, secrets: ["пароль-бэкапа 1"])) == nil, "испорченный файл прочитался")
+let again = try BackupCrypto.encrypt(json, secrets: ["пароль-бэкапа 1"])
 precondition(again != sealed, "соль не случайная")
 precondition(!String(decoding: sealed, as: UTF8.self).contains("Сидорова"), "в зашифрованном видны данные")
-print("шифрование бэкапа в порядке")
+// ключа восстановления нет (пустой) — один замок, паролем
+let onlyPassword = try BackupCrypto.encrypt(json, secrets: ["пароль-бэкапа 1", ""])
+let byOnlyPassword = try BackupCrypto.decrypt(onlyPassword, secrets: ["пароль-бэкапа 1"])
+precondition(byOnlyPassword == json && onlyPassword.count < sealed.count, "бэкап без ключа восстановления")
+// бэкап 5.1 (формат 1: метка, соль, раунды, данные) читается паролем
+let salt1 = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
+var v1 = Data("REPORTER-ENC1\n".utf8) + salt1
+withUnsafeBytes(of: UInt32(1000).bigEndian) { v1.append(contentsOf: $0) }
+v1.append(try AES.GCM.seal(json, using: BackupCrypto.derive("пароль-бэкапа 1", salt1, 1000)).combined!)
+let byV1 = try BackupCrypto.decrypt(v1, secrets: ["пароль-бэкапа 1"])
+precondition(BackupCrypto.isEncrypted(v1) && byV1 == json, "бэкап 5.1 не читается")
+precondition((try? BackupCrypto.decrypt(v1, secrets: ["пароль-бэкапа 2"])) == nil, "бэкап 5.1: чужой пароль подошёл")
+// ── PIN-код: в связке ключей соль и хеш, самого кода нет ──
+let pin = PinCode.seal("2580")
+precondition(PinCode.matches("2580", pin) && !PinCode.matches("2581", pin) && !PinCode.matches("2580", ""), "PIN-код")
+precondition(PinCode.seal("2580") != pin && !pin.contains("2580"), "PIN-код без соли или открытым текстом")
+print("шифрование бэкапа, ключ восстановления и PIN-код в порядке")
 // выдача из корзины: JSON-обёртка возвращает целые числа целыми
 let cartBack = fromJSON(asJSON(CartRaw(id: 7, issued_at: "2026-11-05", employee_id: "e1", employee: "Сидорова Мария",
                                        model: "285", qty: 3, note: nil)), as: CartRaw.self)

@@ -1,4 +1,3 @@
-import LocalAuthentication
 import QuickLook
 import SwiftUI
 import UserNotifications
@@ -130,53 +129,6 @@ enum Reminder {
     }
 }
 
-// ── вход по Face ID ─────────────────────────────────────────────────────────
-/// Приложение закрывается, когда уходит в фон, и открывается по Face ID (или коду-паролю iPhone).
-enum AppLock {
-    static let key = "lock.on"
-
-    /// nil — есть чем входить; иначе — почему нельзя включить.
-    static func unavailable() -> String? {
-        var e: NSError?
-        return LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: &e) ? nil
-            : "На iPhone не настроены ни Face ID, ни код-пароль. Включите их в настройках iPhone: «Face ID и код-пароль»."
-    }
-
-    /// nil — вошли. Иначе — почему нет; отмену человеком не объясняем (пустая строка).
-    static func unlock() async -> String? {
-        let c = LAContext()
-        c.localizedFallbackTitle = "Ввести код-пароль"
-        do {
-            let ok = try await c.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Вход в REPORTER")
-            return ok ? nil : "iPhone не подтвердил, что это вы."
-        } catch let e as LAError where [.userCancel, .appCancel, .systemCancel].contains(e.code) {
-            return ""
-        } catch {
-            return error.localizedDescription
-        }
-    }
-}
-
-/// Экран поверх приложения, пока оно закрыто: и в переключателе приложений данные не видны.
-struct LockView: View {
-    let unlock: () -> Void
-
-    var body: some View {
-        ZStack {
-            AppBackground().ignoresSafeArea()
-            VStack(spacing: 18) {
-                Image("Logo").resizable().scaledToFit().frame(height: 96)
-                Text("REPORTER").font(.title2.bold())
-                Button(action: unlock) {
-                    Label("Войти по Face ID", systemImage: "faceid").font(.headline).padding(.vertical, 4)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(Brand.blue)
-            }
-        }
-    }
-}
-
 // ── быстрые действия с иконки ───────────────────────────────────────────────
 /// Долгое нажатие на иконку приложения: «Новая запись», «Выдать картридж», «Найти сотрудника»,
 /// «Отправить отчёт» (список — в project.yml). Действие приходит в делегат сцены, главный экран его забирает.
@@ -198,6 +150,8 @@ final class SceneDelegate: NSObject, UIWindowSceneDelegate {
 
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options: UIScene.ConnectionOptions) {
         if let item = options.shortcutItem { Self.pending = item.type }
+        // вход закрыт — окно входа встаёт раньше первого кадра приложения
+        if let s = scene as? UIWindowScene { LockScreen.shared.start(in: s) }
     }
 
     func windowScene(_ windowScene: UIWindowScene, performActionFor shortcutItem: UIApplicationShortcutItem,

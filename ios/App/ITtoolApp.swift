@@ -18,14 +18,12 @@ struct RootView: View {
     @State private var tab = AppTab.home
     @State private var page: AppTab? = .home        // какая страница сейчас в прокрутке
     @State private var progress: CGFloat = 0        // 0…4: положение прокрутки в страницах — по нему едет линза
-    // открыли быстрым действием с иконки — сразу к делу, без заставки
-    @State private var splash = SceneDelegate.pending == nil
-    @State private var revealed = SceneDelegate.pending != nil    // заставка раскрывается — карточки главной выезжают
+    // открыли быстрым действием с иконки — сразу к делу, без заставки. Со входом заставки тоже нет: её роль
+    // играет экран входа, а 4 секунды заставки под ним добавлялись к Face ID — приложение открывалось долго
+    @State private var splash = SceneDelegate.pending == nil && !LockScreen.shared.locked
+    // заставка раскрывается — карточки главной выезжают
+    @State private var revealed = SceneDelegate.pending != nil || LockScreen.shared.locked
     @State private var keyboard = false             // клавиатура на экране — панель и «+» прячутся
-    @AppStorage(AppLock.key) private var lockOn = false
-    // с входом по Face ID приложение стартует закрытым и закрывается, уходя в фон
-    @State private var locked = UserDefaults.standard.bool(forKey: AppLock.key)
-    @State private var unlocking = false
 
     var body: some View {
         // размер страниц задаём явно: с containerRelativeFrame лента вылезала за экран и панель уезжала вниз
@@ -86,26 +84,18 @@ struct RootView: View {
                 SplashView(opening: { revealed = true }, done: { splash = false })
             }
         }
-        .overlay {
-            // закрыто — или приложение не на экране (переключатель приложений): данные не видны
-            if lockOn && (locked || phase != .active) {
-                LockView { Task { await unlock() } }
-                    .transition(.opacity)
-            }
-        }
         .task(id: phase) {
             guard phase == .active else { return }
             store.refreshToday()                  // приложение могло пролежать в памяти до нового дня
             store.syncReminders()
             applyTheme(theme)
-            if lockOn && locked { await unlock() }
             await store.backup()                  // по расписанию, при открытии приложения
             await store.verifyBackup()            // раз в месяц: последний бэкап читается
         }
-        .onChange(of: phase) { _, p in
-            guard p == .background else { return }
-            if lockOn { locked = true }
-            guard store.backupDue else { return }
+        .onChange(of: phase, initial: true) { _, p in
+            // вход: в фоне — закрыть, на экране — спросить Face ID; не на экране — данные не видны
+            LockScreen.shared.scene(p)
+            guard p == .background, store.backupDue else { return }
             // бэкап «после изменений» уходит, когда приложение сворачивают: просим у системы время доотправить
             let app = UIApplication.shared, box = BackgroundTaskBox()
             box.id = app.beginBackgroundTask(withName: "REPORTER backup") {
@@ -128,14 +118,6 @@ struct RootView: View {
     private func go(_ t: AppTab) {
         tab = t
         withAnimation(.smooth(duration: 0.38)) { page = t }
-    }
-
-    /// Face ID (или код-пароль). Пока окно Face ID на экране, приложение «неактивно» — второй раз не спрашиваем.
-    private func unlock() async {
-        guard !unlocking else { return }
-        unlocking = true
-        defer { unlocking = false }
-        if await AppLock.unlock() == nil { withAnimation(.easeOut(duration: 0.25)) { locked = false } }
     }
 
     /// Быстрое действие с иконки приложения: сразу к делу, без заставки.
@@ -216,6 +198,11 @@ struct SettingsView: View {
     @AppStorage(Reminder.birthdaysKey) private var birthdaysOn = false
     @AppStorage(Reminder.warrantyKey) private var warrantyOn = false
     @AppStorage(AppLock.key) private var lockOn = false
+    @AppStorage(AppLock.mailKey) private var recoveryMail = ""
+    @State private var lockSetupOpen = false
+    @State private var pinChangeOpen = false
+    @State private var recoveryOpen = false
+    @State private var encryptAfterRecovery = false     // «Шифровать бэкап» ждёт почту для восстановления
 
     /// Зашифрованный бэкап, к которому не подошёл сохранённый пароль: спрашиваем пароль.
     struct SealedFile: Identifiable {
@@ -275,11 +262,36 @@ struct SettingsView: View {
                     Text("Дата рождения — в карточке сотрудника, срок гарантии — в карточке устройства.")
                 }
                 Section {
-                    Toggle(isOn: Binding(get: { lockOn }, set: { setLock($0) })) {
-                        Label("Вход по Face ID", systemImage: "faceid")
+                    // включается только через настройку PIN-кода: переключатель встаёт, когда PIN-код задан
+                    Toggle(isOn: Binding(get: { lockOn }, set: { on in
+                        if on {
+                            lockSetupOpen = true
+                        } else {
+                            AppLock.setPIN("")
+                            lockOn = false
+                        }
+                    })) {
+                        Label(AppLock.title, systemImage: "lock.shield")
                     }
+                    .accessibilityIdentifier("lock.toggle")
+                    if lockOn {
+                        Button { pinChangeOpen = true } label: {
+                            Label("Сменить PIN-код", systemImage: "circle.grid.3x3.fill")
+                        }
+                        .tint(.primary)
+                    }
+                    Button { recoveryOpen = true } label: {
+                        LabeledContent {
+                            Text(recoveryMail.isEmpty ? "не указана" : AppLock.masked(recoveryMail))
+                        } label: {
+                            Label("Почта для восстановления", systemImage: "envelope.badge.shield.half.filled")
+                        }
+                    }
+                    .tint(.primary)
                 } header: { Text("Защита") } footer: {
-                    Text("Приложение закрывается, когда уходит в фон, и открывается по Face ID или коду-паролю iPhone.")
+                    Text("Приложение закрывается, когда уходит в фон, и открывается по Face ID или PIN-коду. "
+                         + "Забыли PIN-код — его сбросит ключ восстановления из письма; этот же ключ открывает "
+                         + "зашифрованный бэкап, если забудете пароль.")
                 }
                 Section {
                     Button { unitsOpen = true } label: {
@@ -346,7 +358,15 @@ struct SettingsView: View {
                     } label: {
                         Label("Как часто", systemImage: "calendar.badge.clock")
                     }
-                    Toggle(isOn: Binding(get: { store.state.backupEncrypt }, set: { store.setBackupEncrypt($0) })) {
+                    // шифрование — только с почтой для восстановления: забытый пароль бэкапа заменит ключ из письма
+                    Toggle(isOn: Binding(get: { store.state.backupEncrypt }, set: { on in
+                        if on && recoveryMail.isEmpty {
+                            encryptAfterRecovery = true
+                            recoveryOpen = true
+                        } else {
+                            store.setBackupEncrypt(on)
+                        }
+                    })) {
                         Label("Шифровать бэкап", systemImage: "lock.fill")
                     }
                     if store.state.backupEncrypt {
@@ -354,6 +374,14 @@ struct SettingsView: View {
                             SecureField("не короче 8 знаков", text: $backupPassword)
                                 .multilineTextAlignment(.trailing)
                                 .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        }
+                        if recoveryMail.isEmpty {
+                            // шифрование включили в 5.1, до почты для восстановления
+                            Button { recoveryOpen = true } label: {
+                                Label("Укажите почту для восстановления — иначе забытый пароль бэкапа не заменить",
+                                      systemImage: "exclamationmark.triangle.fill")
+                                    .font(.footnote).foregroundStyle(.orange)
+                            }
                         }
                     }
                     LabeledContent("Последний бэкап") {
@@ -397,8 +425,9 @@ struct SettingsView: View {
                     }
                 } header: { Text("Бэкап в Telegram") } footer: {
                     Text("Бот присылает в группу два файла: Excel — чтобы читать, JSON — чтобы восстановить. "
-                         + "С шифрованием — один файл .reporter: без пароля бэкапа его не открыть, а пароль хранится "
-                         + "в связке ключей iPhone — запишите его. Раз в месяц приложение само скачивает последний бэкап "
+                         + "С шифрованием — один файл .reporter: открыть его можно паролем бэкапа или ключом "
+                         + "восстановления из письма, пароль хранится в связке ключей iPhone. "
+                         + "Раз в месяц приложение само скачивает последний бэкап "
                          + "и проверяет, что он читается. Чтобы узнать ID группы, добавьте бота в группу и напишите в ней "
                          + "/start@имя_вашего_бота. Для восстановления сохраните файл из Telegram в «Файлы».")
                 }
@@ -445,12 +474,21 @@ struct SettingsView: View {
                     do {
                         let data = try Data(contentsOf: url)
                         if BackupCrypto.isEncrypted(data) {
-                            // сохранённый пароль подошёл — сразу к восстановлению, иначе спрашиваем
-                            if let plain = try? BackupCrypto.decrypt(data, password: Keychain.get(BackupCrypto.passwordKey)) {
-                                restoring = PendingRestore(file: try BackupFile.read(plain), name: url.lastPathComponent)
-                            } else {
-                                filePassword = ""
-                                sealed = SealedFile(data: data, name: url.lastPathComponent)
+                            let name = url.lastPathComponent
+                            let mine = [Keychain.get(BackupCrypto.passwordKey), Keychain.get(RecoveryKey.keychain)]
+                            Task {
+                                // свои пароль или ключ подошли — сразу к восстановлению, иначе спрашиваем.
+                                // PBKDF2 на каждый замок — не в главном потоке, экран не замирает
+                                if let plain = try? await Task.detached(operation: {
+                                    try BackupCrypto.decrypt(data, secrets: mine)
+                                }).value {
+                                    do {
+                                        restoring = PendingRestore(file: try BackupFile.read(plain), name: name)
+                                    } catch { self.error = error.localizedDescription }
+                                } else {
+                                    filePassword = ""
+                                    sealed = SealedFile(data: data, name: name)
+                                }
                             }
                         } else {
                             restoring = PendingRestore(file: try BackupFile.read(data), name: url.lastPathComponent)
@@ -464,11 +502,46 @@ struct SettingsView: View {
             }
             .alert("Пароль бэкапа", isPresented: Binding(get: { sealed != nil }, set: { if !$0 { sealed = nil } }),
                    presenting: sealed) { f in
-                SecureField("Пароль", text: $filePassword)
+                SecureField("Пароль или ключ", text: $filePassword)
                 Button("Открыть") { openSealed(f) }
                 Button("Отмена", role: .cancel) {}
             } message: { _ in
-                Text("Файл зашифрован. Введите пароль, с которым его отправляли.")
+                Text("Файл зашифрован. Введите пароль бэкапа — или ключ восстановления из письма, если пароль забыли.")
+            }
+            .sheet(isPresented: $lockSetupOpen) {
+                LockSetup { pin in
+                    AppLock.setPIN(pin)
+                    lockOn = true
+                }
+            }
+            .sheet(isPresented: $pinChangeOpen) {
+                NavigationStack {
+                    NewPin(title: "Новый PIN-код") { pin in
+                        AppLock.setPIN(pin)
+                        pinChangeOpen = false
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .navigationTitle("Сменить PIN-код")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) { Button("Отмена") { pinChangeOpen = false } }
+                    }
+                }
+                .presentationCornerRadius(24)
+            }
+            .sheet(isPresented: $recoveryOpen, onDismiss: { encryptAfterRecovery = false }) {
+                NavigationStack {
+                    RecoverySetup {
+                        if encryptAfterRecovery { store.setBackupEncrypt(true) }
+                        recoveryOpen = false
+                    }
+                    .navigationTitle("Почта для восстановления")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { recoveryOpen = false } }
+                    }
+                }
+                .presentationCornerRadius(24)
             }
             .sheet(isPresented: $trashOpen) {
                 NavigationStack {
@@ -528,39 +601,19 @@ struct SettingsView: View {
         }
     }
 
-    /// Вход по Face ID включается, только если iPhone умеет проверять владельца и проверка прошла.
-    private func setLock(_ on: Bool) {
-        guard on else {
-            lockOn = false
-            return
-        }
-        if let why = AppLock.unavailable() {
-            error = why
-            return
-        }
-        Task {
-            // включаем, только когда проверка прошла; не прошла — объясняем (кроме случая, когда человек отменил сам)
-            if let why = await AppLock.unlock() {
-                if !why.isEmpty { error = "Вход по Face ID не включён: " + why }
-            } else {
-                lockOn = true
-            }
-        }
-    }
-
     private func openSealed(_ f: SealedFile) {
-        let password = filePassword
+        let typed = filePassword, data = f.data
         filePassword = ""
         Task {
             // окно пароля успевает закрыться: лист или ошибка поверх закрывающегося окна не показываются
             try? await Task.sleep(for: .milliseconds(450))
             do {
-                let plain = try BackupCrypto.decrypt(f.data, password: password)
+                let plain = try await Task.detached { try BackupCrypto.decrypt(data, secrets: [typed]) }.value
                 restoring = PendingRestore(file: try BackupFile.read(plain), name: f.name)
-                // пароль подошёл, а своего в телефоне нет (новый iPhone) — запоминаем для следующих бэкапов
-                if Keychain.get(BackupCrypto.passwordKey).isEmpty {
-                    Keychain.set(BackupCrypto.passwordKey, password)
-                    backupPassword = password
+                // подошёл пароль (не ключ из письма), а своего в телефоне нет (новый iPhone) — запоминаем его
+                if Keychain.get(BackupCrypto.passwordKey).isEmpty && !RecoveryKey.looksLike(typed) {
+                    Keychain.set(BackupCrypto.passwordKey, typed)
+                    backupPassword = typed
                 }
             } catch { self.error = error.localizedDescription }
         }
