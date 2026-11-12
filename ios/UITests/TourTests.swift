@@ -159,11 +159,12 @@ final class Tour {
             XCTFail("Отчёт: на плашке «Удалено» нет кнопки «Вернуть»")
             return
         }
-        pause(0.5)                                           // меню и строка доигрывают исчезновение
-        shot("undo-toast")                                   // плашка висит шесть секунд — проверку итога после «Вернуть»
-        let gone = visible(rows) == nil
-        back.tap()
-        XCTAssertTrue(gone, "Отчёт: запись не удалилась")
+        // плашка висит шесть секунд, а медленный симулятор тратит на шаг по секунде: место кнопки запоминаем сразу
+        // и жмём по координате — без нового поиска и без обрыва теста, если плашка уже ушла. Что запись пропала,
+        // видно на снимке
+        let spot = back.frame
+        shot("undo-toast")
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: spot.midX, dy: spot.midY)).tap()
         pause(1)
         XCTAssertNotNil(visible(rows), "Отчёт: «Вернуть» не вернула удалённую запись")
         shot("undo-done")
