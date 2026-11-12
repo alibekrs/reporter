@@ -333,9 +333,10 @@ final class Tour {
             XCTFail("Настройки: нет переключателя «Вход по Face ID»")
             return
         }
-        flip(toggle)
+        flip(toggle, "faceid")
         let alert = app.alerts.firstMatch
-        if alert.waitForExistence(timeout: 5) {
+        if alert.waitForExistence(timeout: 8) {
+            print("РАЗБОР Face ID: " + alert.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | "))
             shot("faceid-unavailable")
             alert.buttons.firstMatch.tap()
         } else {
@@ -370,7 +371,7 @@ final class Tour {
             XCTFail("Бэкап: нет «Шифровать бэкап»")
             return
         }
-        flip(encrypt)
+        flip(encrypt, "encrypt")
         XCTAssertEqual(encrypt.value as? String, "1", "Бэкап: шифрование не включилось")
         type("не короче 8 знаков", "проверка-1234")
         hideKeyboard()
@@ -414,16 +415,29 @@ final class Tour {
     /// Нажать переключатель (по самому тумблеру справа). Прокрутка, упёршаяся в край страницы, ещё пружинит,
     /// и нажатие в это время только останавливает её — тогда тумблер не сдвинулся, и жмём ещё раз. Окно
     /// (разрешение уведомлений, ошибка) — значит, нажатие дошло.
-    private func flip(_ toggle: XCUIElement) {
+    private func flip(_ toggle: XCUIElement, _ name: String) {
         pause(1.2)
         let before = toggle.value as? String
         let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        for attempt in 0..<2 {
+        for attempt in 1...2 {
+            // поверх — системное окно (Face ID, код-пароль): нажатие уйдёт в никуда, а XCUITest упадёт
+            guard toggle.isHittable else {
+                print("РАЗБОР \(name): переключатель закрыт другим окном")
+                shot(name + "-covered")
+                return
+            }
             toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
-            pause(1.2)
-            let answered = app.alerts.firstMatch.exists || board.alerts.firstMatch.exists
-            if answered || toggle.value as? String != before { return }
-            print("РАЗБОР переключатель «\(toggle.label)»: нажатие \(attempt + 1) не сдвинуло его")
+            pause(0.4)
+            shot(name + "-tap\(attempt)")                  // что стало сразу после нажатия — для разбора
+            pause(0.8)
+            let alert = app.alerts.firstMatch
+            if alert.exists {
+                print("РАЗБОР \(name): окно — " + alert.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | "))
+                return
+            }
+            let now = toggle.value as? String
+            if board.alerts.firstMatch.exists || now != before { return }
+            print("РАЗБОР \(name): нажатие \(attempt) не сдвинуло переключатель (было \(before ?? "?"), стало \(now ?? "?"))")
         }
     }
 
@@ -695,13 +709,20 @@ final class Tour {
             XCTFail("Настройки: нет переключателя «Напомнить в пятницу»")
             return
         }
-        flip(toggle)
+        flip(toggle, "reminder")
         let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         for label in ["Allow", "Разрешить"] {                // запрос показывает система, язык у неё свой
             let allow = board.buttons[label]
             if allow.waitForExistence(timeout: 3) { allow.tap(); break }
         }
         pause(1.5)
+        let failed = app.alerts.firstMatch                   // приложение объяснило, почему не включилось
+        if failed.exists {
+            print("РАЗБОР напоминание: " + failed.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | "))
+            shot("reminder-alert")
+            failed.buttons.firstMatch.tap()
+            pause(0.8)
+        }
         XCTAssertEqual(toggle.value as? String, "1", "Настройки: напоминание в пятницу не включилось")
         shot("reminder-on")
     }

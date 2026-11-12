@@ -135,7 +135,7 @@ struct RootView: View {
         guard !unlocking else { return }
         unlocking = true
         defer { unlocking = false }
-        if await AppLock.unlock() { withAnimation(.easeOut(duration: 0.25)) { locked = false } }
+        if await AppLock.unlock() == nil { withAnimation(.easeOut(duration: 0.25)) { locked = false } }
     }
 
     /// Быстрое действие с иконки приложения: сразу к делу, без заставки.
@@ -512,8 +512,9 @@ struct SettingsView: View {
                 }
                 .presentationCornerRadius(24)
             }
-            .errorAlert($error)
         }
+        // ошибки — снаружи стека, окно пароля бэкапа — внутри: два окна на одном виде SwiftUI показывает не всегда
+        .errorAlert($error)
     }
 
     /// Включили напоминание — спрашиваем разрешение на уведомления; запретили — выключаем обратно.
@@ -537,7 +538,14 @@ struct SettingsView: View {
             error = why
             return
         }
-        Task { if await AppLock.unlock() { lockOn = true } }
+        Task {
+            // включаем, только когда проверка прошла; не прошла — объясняем (кроме случая, когда человек отменил сам)
+            if let why = await AppLock.unlock() {
+                if !why.isEmpty { error = "Вход по Face ID не включён: " + why }
+            } else {
+                lockOn = true
+            }
+        }
     }
 
     private func openSealed(_ f: SealedFile) {

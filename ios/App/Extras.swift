@@ -142,10 +142,18 @@ enum AppLock {
             : "На iPhone не настроены ни Face ID, ни код-пароль. Включите их в настройках iPhone: «Face ID и код-пароль»."
     }
 
-    static func unlock() async -> Bool {
+    /// nil — вошли. Иначе — почему нет; отмену человеком не объясняем (пустая строка).
+    static func unlock() async -> String? {
         let c = LAContext()
         c.localizedFallbackTitle = "Ввести код-пароль"
-        return (try? await c.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Вход в REPORTER")) ?? false
+        do {
+            let ok = try await c.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Вход в REPORTER")
+            return ok ? nil : "iPhone не подтвердил, что это вы."
+        } catch let e as LAError where [.userCancel, .appCancel, .systemCancel].contains(e.code) {
+            return ""
+        } catch {
+            return error.localizedDescription
+        }
     }
 }
 
