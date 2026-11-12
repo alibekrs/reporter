@@ -27,6 +27,11 @@ struct OptionalDateRow: View {
     }
 }
 
+/// «меньше года», «3 года», «7 лет» — сколько устройству.
+func ageText(_ years: Int) -> String {
+    years < 1 ? "меньше года" : "\(years) \(plural(years, "год", "года", "лет"))"
+}
+
 /// Гарантия кончилась — красным, осталось меньше месяца — оранжевым; иначе ничего.
 struct WarrantyBadge: View {
     let days: Int?
@@ -34,7 +39,7 @@ struct WarrantyBadge: View {
     var body: some View {
         if let d = days, d <= 30 {
             let color = d < 0 ? Color.red : Color.orange
-            Text(d < 0 ? "гарантия кончилась" : "гарантия: \(d) дн.")
+            Text(d < 0 ? "гарантия кончилась" : (d == 0 ? "гарантия: последний день" : "гарантия: \(d) дн."))
                 .font(.caption2.weight(.bold))
                 .foregroundStyle(color)
                 .padding(.horizontal, 6).padding(.vertical, 2)
@@ -53,7 +58,7 @@ struct DeviceLine: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(store.deviceTitle(d)).lineLimit(1)
                 if let y = Store.age(d.item, today: store.today) {
-                    Text("куплен \(Readable.date(d.item["bought"]?.string ?? "")) · \(y) \(plural(y, "год", "года", "лет"))")
+                    Text("куплен \(Readable.date(d.item["bought"]?.string ?? "")) · \(ageText(y))")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -119,8 +124,7 @@ struct DeviceSheet: View {
                 ForEach(fields.indices, id: \.self) { i in LabeledContent(fields[i].0, value: fields[i].1) }
                 if !cartridge.isEmpty { LabeledContent("Картридж", value: cartridge) }
                 if !bought.isEmpty {
-                    let y = Store.age(d.item, today: store.today) ?? 0
-                    LabeledContent("Куплен", value: Readable.date(bought) + " · \(y) \(plural(y, "год", "года", "лет"))")
+                    LabeledContent("Куплен", value: Readable.date(bought) + " · " + ageText(Store.age(d.item, today: store.today) ?? 0))
                 }
                 if !warranty.isEmpty {
                     LabeledContent("Гарантия до") {

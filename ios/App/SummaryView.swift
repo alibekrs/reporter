@@ -82,8 +82,9 @@ struct SummaryView: View {
                                 .foregroundStyle(rows[i].2)
                         }
                         GeometryReader { g in
+                            // ноль — без полоски: точка у пустой строки выглядела как «чуть-чуть»
                             Capsule().fill(rows[i].2.opacity(0.8))
-                                .frame(width: max(g.size.width * CGFloat(rows[i].1) / CGFloat(total), 6))
+                                .frame(width: rows[i].1 > 0 ? max(g.size.width * CGFloat(rows[i].1) / CGFloat(total), 6) : 0)
                         }
                         .frame(height: 5)
                     }
@@ -98,7 +99,8 @@ struct SummaryView: View {
             } header: {
                 Text("Возраст техники сейчас")
             } footer: {
-                Text("По дате покупки в карточках техники. Самая старая — ниже полосок: её пора менять.")
+                Text("По дате покупки в карточках техники."
+                     + (f.oldest.isEmpty ? "" : " Под полосками — самая старая: её пора менять."))
             }
         }
     }

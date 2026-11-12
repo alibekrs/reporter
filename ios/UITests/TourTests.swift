@@ -333,7 +333,7 @@ final class Tour {
             XCTFail("Настройки: нет переключателя «Вход по Face ID»")
             return
         }
-        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        flip(toggle)
         let alert = app.alerts.firstMatch
         if alert.waitForExistence(timeout: 5) {
             shot("faceid-unavailable")
@@ -370,8 +370,8 @@ final class Tour {
             XCTFail("Бэкап: нет «Шифровать бэкап»")
             return
         }
-        encrypt.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
-        pause(0.8)
+        flip(encrypt)
+        XCTAssertEqual(encrypt.value as? String, "1", "Бэкап: шифрование не включилось")
         type("не короче 8 знаков", "проверка-1234")
         hideKeyboard()
         if let check = reveal(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Проверить бэкап сейчас")),
@@ -408,6 +408,22 @@ final class Tour {
         if bar.exists {
             bar.buttons.element(boundBy: 0).tap()
             pause(0.8)
+        }
+    }
+
+    /// Нажать переключатель (по самому тумблеру справа). Прокрутка, упёршаяся в край страницы, ещё пружинит,
+    /// и нажатие в это время только останавливает её — тогда тумблер не сдвинулся, и жмём ещё раз. Окно
+    /// (разрешение уведомлений, ошибка) — значит, нажатие дошло.
+    private func flip(_ toggle: XCUIElement) {
+        pause(1.2)
+        let before = toggle.value as? String
+        let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        for attempt in 0..<2 {
+            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+            pause(1.2)
+            let answered = app.alerts.firstMatch.exists || board.alerts.firstMatch.exists
+            if answered || toggle.value as? String != before { return }
+            print("РАЗБОР переключатель «\(toggle.label)»: нажатие \(attempt + 1) не сдвинуло его")
         }
     }
 
@@ -679,7 +695,7 @@ final class Tour {
             XCTFail("Настройки: нет переключателя «Напомнить в пятницу»")
             return
         }
-        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        flip(toggle)
         let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         for label in ["Allow", "Разрешить"] {                // запрос показывает система, язык у неё свой
             let allow = board.buttons[label]

@@ -72,9 +72,12 @@ struct UnitCard: View {
         let s = store.unitStats(unitId)
         let month = Dates.months[(Int(store.today.dropFirst(5).prefix(2)) ?? 1) - 1].lowercased()
         List {
-            Section {
-                Text(unit?.path ?? "Подразделение удалено").font(.subheadline).foregroundStyle(.secondary)
-                    .listRowBackground(Color.clear)
+            // путь — только у вложенного: у верхнего уровня он повторял заголовок
+            if unit == nil || unit?.path != unit?.name {
+                Section {
+                    Text(unit?.path ?? "Подразделение удалено").font(.subheadline).foregroundStyle(.secondary)
+                        .listRowBackground(Color.clear)
+                }
             }
             Section {
                 HStack(spacing: 10) {

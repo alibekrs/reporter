@@ -51,10 +51,17 @@ struct TrashView: View {
         .errorAlert($error)
     }
 
-    /// «удалено 12.11 · ещё 29 дн.»
+    private static let day: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ru_RU")
+        f.dateFormat = "dd.MM"
+        return f
+    }()
+
+    /// «удалено 12.11 · ещё 29 дн.» — в одну строку
     private func left(_ deleted: Date) -> String {
         let gone = Calendar(identifier: .gregorian).dateComponents([.day], from: deleted, to: Date()).day ?? 0
-        return "удалено \(Dates.stamp.string(from: deleted)) · ещё \(max(0, 30 - gone)) дн."
+        return "удалено \(Self.day.string(from: deleted)) · ещё \(max(0, 30 - gone)) дн."
     }
 
     private func restore(_ t: TrashItem) {
