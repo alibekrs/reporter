@@ -208,7 +208,7 @@ final class Tour {
         // ждём текст документа
         let loading = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@ OR label BEGINSWITH %@",
                                                            "Загрузка", "Loading")).firstMatch
-        let text = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Ответственный")).firstMatch
+        let text = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Выполненные")).firstMatch   // только в документе: «Ответственный» есть и в настройках
         pause(6)
         let deadline = Date().addingTimeInterval(60)
         while (loading.exists || !text.exists) && Date() < deadline { pause(2) }
