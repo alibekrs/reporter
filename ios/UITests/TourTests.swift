@@ -794,14 +794,44 @@ final class Tour {
         open("Настройки")
         pause(1)
         stageToggle("сразу после запуска")
-        unitsSheet(card: false)
-        stageToggle("после листа «Подразделения»")
+        // запись в отчёте, на которой проверять меню
+        open("Отчёт")
+        if let add = checkAdd("Отчёт, разбор"), tapAdd(add, opens: "Новая запись", "stage") {
+            type("Описание", "Проверка меню")
+            tapBarButton("Новая запись", "Сохранить")
+            pause(1.2)
+        }
+        entryMenu("Сохранить как шаблон")
+        tapBarButton("Новый шаблон", "Отмена")
+        pause(1)
+        open("Настройки")
+        stageToggle("после меню записи и шаблона")
+        entryMenu("Удалить")
+        pause(7)
+        open("Настройки")
+        stageToggle("после меню записи «Удалить»")
+        open("Главная")
+        tapFirst(app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "Начальнику")), "«Начальнику»")
+        if app.alerts.firstMatch.waitForExistence(timeout: 5) { app.alerts.firstMatch.buttons.firstMatch.tap() }
+        pause(1)
+        open("Настройки")
+        stageToggle("после окна ошибки почты")
         unitsSheet(card: true)
         stageToggle("после карточки отдела в листе")
-        open("Главная")
-        open("Настройки")
-        stageToggle("после смены страницы")
-        legacyToggles()
+    }
+
+    /// Долгое нажатие на запись «Проверка меню» в отчёте и пункт меню.
+    private func entryMenu(_ item: String) {
+        open("Отчёт")
+        let rows = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Проверка меню"))
+        guard let row = reveal(rows, fromTop: true, tries: 4) else {
+            print("РАЗБОР меню: нет записи «Проверка меню»")
+            return
+        }
+        row.press(forDuration: 1.2)
+        let b = app.buttons[item]
+        if b.waitForExistence(timeout: 3) { b.tap() } else { print("РАЗБОР меню: нет пункта «\(item)»") }
+        pause(1.2)
     }
 
     /// Открыть и закрыть «Подразделения» (card — зайти в карточку «Филиал» и вернуться).
