@@ -9,6 +9,10 @@ on:
         description: "Проверить и на iOS 26.5 (ещё ~120 минут лимита)"
         type: boolean
         default: false
+      only:
+        description: "Только этот тест из TourTests (например, test9Toggles) — для быстрого разбора"
+        type: string
+        default: ""
 
 jobs:
   build:
@@ -112,7 +116,9 @@ jobs:
       - name: UI tests
         run: |
           status=0
+          only="${{ inputs.only }}"
           xcodebuild test -project ITtool.xcodeproj -scheme ITtool -destination "id=$UDID" \
+            ${only:+-only-testing:ITtoolUITests/TourTests/$only} \
             -resultBundlePath "$RUNNER_TEMP/ui.xcresult" CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual \
             > "$RUNNER_TEMP/ui.log" 2>&1 || status=$?
           grep -E "error:|warning: .*/(App|UITests)/|Test Case|Executed|TEST (SUCCEEDED|FAILED)|РАЗБОР" "$RUNNER_TEMP/ui.log" || true

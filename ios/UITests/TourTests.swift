@@ -13,6 +13,10 @@ final class TourTests: XCTestCase {
 
     /// Светлая тема: все страницы с уже заведёнными данными.
     @MainActor func test2Light() { Tour(self, "light").light() }
+
+    /// Разбор переключателей настроек: каким нажатием они срабатывают (идёт последним; отдельно — Run workflow,
+    /// only = test9Toggles).
+    @MainActor func test9Toggles() { Tour(self, "toggles").toggles() }
 }
 
 @MainActor
@@ -779,6 +783,56 @@ final class Tour {
         for label in ["Отмена", "Закрыть"] {
             let b = app.navigationBars.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
             if b.exists && b.isHittable { b.tap(); pause(0.8) }
+        }
+    }
+
+    /// Переключатели «Настроек» разными нажатиями: что срабатывает, а что нет, и что лежит на экране.
+    func toggles() {
+        launch()
+        pause(6)                                             // заставка доигрывает
+        open("Настройки")
+        pause(1)
+        print("РАЗБОР дерево настроек ↓\n" + app.debugDescription + "\nРАЗБОР дерево настроек ↑")
+        for name in ["Шифровать бэкап", "Напомнить в пятницу"] {
+            guard let t = reveal(app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", name)), fromTop: true,
+                                 tries: 14) else {
+                print("РАЗБОР «\(name)»: переключателя нет на экране")
+                continue
+            }
+            pause(1.5)
+            let before = t.value as? String
+            print("РАЗБОР «\(name)»: рамка \(t.frame), окно \(screen), включён \(t.isEnabled), значение \(before ?? "?"), "
+                  + "вложенных switch \(t.switches.count)")
+            let ways: [(String, () -> Void)] = [
+                ("справа 0.93", { t.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap() }),
+                ("в 32 pt от правого края", {
+                    self.app.coordinate(withNormalizedOffset: .zero)
+                        .withOffset(CGVector(dx: t.frame.maxX - 32, dy: t.frame.midY)).tap()
+                }),
+                ("вложенный switch", { if t.switches.count > 0 { t.switches.firstMatch.tap() } }),
+                ("долгое справа", { t.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).press(forDuration: 0.3) }),
+                ("по центру", { t.tap() }),
+            ]
+            for (how, act) in ways {
+                guard t.isHittable else {
+                    print("РАЗБОР «\(name)»: закрыт другим окном перед «\(how)»")
+                    break
+                }
+                act()
+                pause(1.5)
+                let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+                for label in ["Allow", "Разрешить"] where board.buttons[label].exists { board.buttons[label].tap() }
+                if app.alerts.firstMatch.exists {
+                    print("РАЗБОР «\(name)» «\(how)»: окно — "
+                          + app.alerts.firstMatch.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | "))
+                    app.alerts.firstMatch.buttons.firstMatch.tap()
+                    pause(1)
+                }
+                let now = t.value as? String
+                print("РАЗБОР «\(name)» «\(how)»: было \(before ?? "?"), стало \(now ?? "?")")
+                shot("\(name.prefix(8))-\(how.prefix(10))")
+                if now != before { break }
+            }
         }
     }
 
