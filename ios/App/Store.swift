@@ -10,9 +10,26 @@ struct LocalState: Codable {
     var carts: [CartRaw] = []
     /// nil — шаблоны заявок не меняли, берутся стандартные
     var templates: [EntryTemplate]?
+    /// техника без хозяина: те же группы, что у сотрудника (pcs, monitors, phones, printers)
+    var storeroom: Dict = [:]
+    var deviceLog: [DeviceEvent] = []
+    var trash: [TrashItem] = []
+    /// nil — чек-лист нового сотрудника не меняли, берётся стандартный
+    var checklist: [String]?
     var lastBackup: Date?
     var backupToken = ""
     var backupChat = ""
+    /// week — раз в неделю, day — каждый день, change — после изменений
+    var backupEvery = "week"
+    var backupEncrypt = false
+    /// когда данные меняли последний раз — для бэкапа «после изменений»
+    var changedAt: Date?
+    /// последний отправленный бэкап: file_id в Telegram и что в нём было — для проверки
+    var backupFileId = ""
+    var backupSent = ""
+    var lastCheck: Date?
+    var checkResult = ""
+    var checkOK = false
 
     init() {}
 
@@ -25,9 +42,21 @@ struct LocalState: Codable {
         entries = try c.decodeIfPresent([Entry].self, forKey: .entries) ?? []
         carts = try c.decodeIfPresent([CartRaw].self, forKey: .carts) ?? []
         templates = try c.decodeIfPresent([EntryTemplate].self, forKey: .templates)
+        storeroom = try c.decodeIfPresent(Dict.self, forKey: .storeroom) ?? [:]
+        deviceLog = try c.decodeIfPresent([DeviceEvent].self, forKey: .deviceLog) ?? []
+        trash = try c.decodeIfPresent([TrashItem].self, forKey: .trash) ?? []
+        checklist = try c.decodeIfPresent([String].self, forKey: .checklist)
         lastBackup = try c.decodeIfPresent(Date.self, forKey: .lastBackup)
         backupToken = try c.decodeIfPresent(String.self, forKey: .backupToken) ?? ""
         backupChat = try c.decodeIfPresent(String.self, forKey: .backupChat) ?? ""
+        backupEvery = try c.decodeIfPresent(String.self, forKey: .backupEvery) ?? "week"
+        backupEncrypt = try c.decodeIfPresent(Bool.self, forKey: .backupEncrypt) ?? false
+        changedAt = try c.decodeIfPresent(Date.self, forKey: .changedAt)
+        backupFileId = try c.decodeIfPresent(String.self, forKey: .backupFileId) ?? ""
+        backupSent = try c.decodeIfPresent(String.self, forKey: .backupSent) ?? ""
+        lastCheck = try c.decodeIfPresent(Date.self, forKey: .lastCheck)
+        checkResult = try c.decodeIfPresent(String.self, forKey: .checkResult) ?? ""
+        checkOK = try c.decodeIfPresent(Bool.self, forKey: .checkOK) ?? false
     }
 }
 
@@ -55,12 +84,54 @@ struct Summary {
     }
 }
 
+/// Устройство, где бы оно ни было: у сотрудника (holder — его id) или на складе (holder пустой).
+struct DeviceRef: Identifiable, Hashable {
+    let id: String
+    let group: String
+    let holder: String
+    let item: Dict
+}
+
+/// Строка истории устройства: событие или заявка из отчёта.
+struct HistoryLine: Identifiable, Hashable {
+    let id: String
+    let date: String
+    let icon: String
+    let text: String
+    var detail = ""
+}
+
+/// Карточка подразделения (вместе с вложенными): люди, техника, заявки и картриджи за месяц.
+struct UnitStats {
+    var people: [Dict] = []
+    var devices: [(title: String, count: Int)] = []
+    var withTrouble = 0
+    var old = 0
+    var entries = 0
+    var carts = 0
+}
+
+/// Возраст парка по дате покупки.
+struct FleetAge {
+    var young = 0, middle = 0, old = 0, unknown = 0
+    var oldest: [DeviceRef] = []
+}
+
+struct Birthday: Identifiable {
+    let id: String
+    let fio: String
+    let day: Date
+    /// 0 — сегодня
+    let days: Int
+}
+
 /// Правила записи — как в модулях ITtool (assets.py, reports.py, cartridges.py).
 @MainActor
 final class Store: ObservableObject {
     @Published private(set) var state = LocalState()
     @Published var backupStatus: String?
     @Published private(set) var backingUp = false
+    @Published private(set) var checking = false
     @Published var action: QuickAction?
     /// Открыта вложенная карточка — листание страниц выключено, чтобы свайп «назад» работал как обычно.
     @Published var lockPaging = false
@@ -89,6 +160,8 @@ final class Store: ObservableObject {
         .flatMap { try? Data(contentsOf: $0) }
         .flatMap { try? JSONDecoder().decode(Meta.self, from: $0) }
 
+    static let deviceGroups = ["pcs", "monitors", "phones", "printers"]
+
     init() {
         if FileManager.default.fileExists(atPath: file.path) {
             do {
@@ -110,6 +183,15 @@ final class Store: ObservableObject {
         }
         if state.meta == nil { state.meta = Store.bundledMeta }
         if state.units.isEmpty { state.units = Store.firstUnit }   // чистая установка: есть куда добавлять сотрудников
+        // техника из версий до 5.1 — без id: даём, иначе ни истории, ни передачи
+        var fresh = false
+        for i in state.employees.indices {
+            if Store.giveIds(&state.employees[i]) { fresh = true }
+        }
+        if Store.giveIds(&state.storeroom) { fresh = true }
+        if fresh { persist() }
+        purgeTrash()
+        syncReminders()
     }
 
     static func newId() -> String { UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() }
@@ -131,7 +213,9 @@ final class Store: ObservableObject {
         beforeDelete = undoable ? state : nil
         if undoable { deletions += 1 }
         withAnimation(.snappy) { apply(&state) }
+        state.changedAt = Date()
         persist()
+        syncReminders()
     }
 
     /// Вернуть то, что удалили последним. false — возвращать уже нечего.
@@ -143,6 +227,9 @@ final class Store: ObservableObject {
             s.entries = old.entries
             s.carts = old.carts
             s.templates = old.templates
+            s.storeroom = old.storeroom
+            s.deviceLog = old.deviceLog
+            s.trash = old.trash                     // из корзины уходит то, что вернули
         }
         return true
     }
@@ -152,11 +239,30 @@ final class Store: ObservableObject {
     /// Наступил новый день? Зовётся, когда приложение выходит на экран и в полночь.
     func refreshToday() {
         let t = Dates.text(Date())
-        if t != today { today = t }
+        if t != today {
+            today = t
+            purgeTrash()
+        }
+    }
+
+    /// Дни рождения и концы гарантии — в напоминания (сами уведомления включаются в настройках).
+    func syncReminders() {
+        Reminder.planned = plannedReminders()
+        Reminder.refresh()
     }
 
     // ── учёт ────────────────────────────────────────────────────────────────
     static func fio(_ e: Dict) -> String { personName(e) }
+
+    /// «Иванов Иван Петрович» → «Иванов И. П.»; не буквы («Тестов 01») не сокращаются.
+    static func short(_ fio: String) -> String {
+        let p = fio.split(separator: " ")
+        guard p.count > 1, !fio.hasPrefix("(") else { return fio }
+        let rest = p.dropFirst().map { w in w.first?.isLetter == true ? "\(w.prefix(1))." : String(w) }
+        return ([String(p[0])] + rest).joined(separator: " ")
+    }
+
+    static func isDismissed(_ e: Dict) -> Bool { !(e["dismissed"]?.string ?? "").isEmpty }
 
     private func parent(_ u: Dict) -> String { u["parent_id"]?.string ?? "" }
 
@@ -200,6 +306,14 @@ final class Store: ObservableObject {
         return Array(all[..<i]) + Array(all[end...])
     }
 
+    /// Подразделение и все вложенные в него.
+    private func unitTree(_ id: String) -> Set<String> {
+        let all = units
+        guard let i = all.firstIndex(where: { $0.id == id }) else { return [id] }
+        let end = all[(i + 1)...].firstIndex { $0.depth <= all[i].depth } ?? all.count
+        return Set(all[i..<end].map(\.id))
+    }
+
     /// Сохранить подразделение: новое (id пустой), переименование или перенос (parent пуст — верхний уровень).
     func saveUnit(id: String, name rawName: String, parent: String) throws {
         let name = rawName.split(separator: " ").joined(separator: " ")
@@ -227,29 +341,65 @@ final class Store: ObservableObject {
     /// Удалить можно только пустое подразделение: без сотрудников и без вложенных.
     func deleteUnit(_ id: String) throws {
         guard !state.employees.contains(where: { $0["unit_id"]?.string == id }) else {
-            throw APIError(message: "В подразделении есть сотрудники. Сначала переведите их в другое.")
+            throw APIError(message: "В подразделении есть сотрудники (может быть, уволенные). Сначала переведите их в другое.")
         }
         guard !state.units.contains(where: { parent($0) == id }) else {
             throw APIError(message: "Сначала удалите или перенесите вложенные подразделения.")
         }
         guard state.units.count > 1 else { throw APIError(message: "Должно остаться хотя бы одно подразделение.") }
-        change(undoable: true) { s in s.units.removeAll { $0["id"]?.string == id } }
+        guard let u = state.units.first(where: { $0["id"]?.string == id }) else { return }
+        let item = trashed("unit", u["name"]?.string ?? "", "подразделение", .object(u))
+        change(undoable: true) { s in
+            s.units.removeAll { $0["id"]?.string == id }
+            s.trash.append(item)
+        }
+    }
+
+    /// Карточка подразделения: считаются и вложенные; уволенные — нет.
+    func unitStats(_ unitId: String) -> UnitStats {
+        let ids = unitTree(unitId)
+        let staff = state.employees.filter { ids.contains($0["unit_id"]?.string ?? "") && !Store.isDismissed($0) }
+        var s = UnitStats()
+        s.people = staff.sorted { Store.fio($0).lowercased() < Store.fio($1).lowercased() }
+        let devs = staff.flatMap { devices(in: $0, holder: $0["id"]?.string ?? "") }
+        for g in meta?.device_order ?? Store.deviceGroups {
+            let n = devs.filter { $0.group == g }.count
+            if n > 0 { s.devices.append((title: meta?.devices[g]?.title ?? g, count: n)) }
+        }
+        s.withTrouble = staff.filter { trouble($0) > 0 }.count
+        s.old = devs.filter { (Store.age($0.item, today: today) ?? 0) >= 5 }.count
+        let month = String(today.prefix(7))
+        let names = Set(staff.map { Store.fio($0).lowercased() })
+        s.entries = state.entries.filter { $0.date.hasPrefix(month) && names.contains(($0.employee ?? "").lowercased()) }.count
+        let people = Set(staff.compactMap { $0["id"]?.string })
+        s.carts = state.carts.filter { $0.issued_at.hasPrefix(month) && people.contains($0.employee_id ?? "") }
+            .reduce(0) { $0 + $1.qty }
+        return s
     }
 
     func employee(_ id: String) -> Dict? { state.employees.first { $0["id"]?.string == id } }
 
-    /// Сотрудники подразделения: руководитель первым, дальше ручной порядок и ФИО.
+    /// Работающие сотрудники подразделения: руководитель первым, дальше ручной порядок и ФИО.
     func employees(in unitId: String, matching query: String) -> [Dict] {
         let path = units.first { $0.id == unitId }?.path ?? ""
-        return found(state.employees.filter { $0["unit_id"]?.string == unitId }, path, query)
+        return found(state.employees.filter { $0["unit_id"]?.string == unitId && !Store.isDismissed($0) }, path, query)
     }
 
     /// Сотрудники, чьего подразделения нет в списке (чужой или старый бэкап). В учёте идут отдельной группой:
     /// иначе их не видно и карточку не открыть.
     func strays(matching query: String) -> [Dict] {
         let known = Set(units.map(\.id))
-        return found(state.employees.filter { !known.contains($0["unit_id"]?.string ?? "") }, "", query)
+        return found(state.employees.filter { !known.contains($0["unit_id"]?.string ?? "") && !Store.isDismissed($0) },
+                     "", query)
     }
+
+    /// Уволенные — в архиве учёта, свежие увольнения первыми.
+    func dismissed(matching query: String) -> [Dict] {
+        found(state.employees.filter { Store.isDismissed($0) }, "", query)
+            .sorted { ($0["dismissed"]?.string ?? "") > ($1["dismissed"]?.string ?? "") }
+    }
+
+    var activeCount: Int { state.employees.filter { !Store.isDismissed($0) }.count }
 
     private func found(_ list: [Dict], _ path: String, _ query: String) -> [Dict] {
         let tokens = query.lowercased().split(separator: " ").map(String.init)
@@ -266,7 +416,7 @@ final class Store: ObservableObject {
             }
     }
 
-    private static let searchSkip: Set<String> = ["id", "unit_id", "order", "updated"]
+    private static let searchSkip: Set<String> = ["id", "unit_id", "order", "updated", "onboarding"]
     private static let searchFlags = ["is_laptop": "ноутбук моноблок", "is_head": "руководитель начальник"]
 
     /// Все данные карточки одной строкой — как assets.search_text на сервере.
@@ -286,17 +436,21 @@ final class Store: ObservableObject {
          "last_name": .string(""), "first_name": .string(""), "middle_name": .string(""),
          "position": .string(""), "floor": .string(""), "office": .string(""), "building": .string(""),
          "account": .string(""), "unit_id": .string(unitId.isEmpty ? rootUnit : unitId), "is_head": .bool(false),
+         "phone": .string(""), "email": .string(""), "birthday": .string(""),
          "pcs": .array([]), "monitors": .array([]), "phones": .array([]), "printers": .array([]),
          "mouse": .object(["condition": .string(meta?.conditions.first ?? "рабочее")]),
          "keyboard": .object(["condition": .string(meta?.conditions.first ?? "рабочее")]),
+         "onboarding": .array(checklist.map { JSON.object(["step": .string($0), "done": .bool(false)]) }),
          "notes": .string(""), "updated": .string("")]
     }
 
-    /// Сохранить карточку (новую или правку). Возвращает сохранённую.
+    /// Сохранить карточку (новую или правку). Возвращает сохранённую. Новая техника попадает в историю,
+    /// убранная из карточки — в корзину.
     @discardableResult
     func saveEmployee(_ d: Dict) -> Dict {
         var emp = d
-        for k in ["last_name", "first_name", "middle_name", "position", "account", "building", "floor", "office", "notes"] {
+        for k in ["last_name", "first_name", "middle_name", "position", "account", "building", "floor", "office", "notes",
+                  "phone", "email"] where emp[k] != nil {
             emp[k] = .string((emp[k]?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
         }
         emp["fio"] = nil
@@ -304,6 +458,22 @@ final class Store: ObservableObject {
         emp["updated"] = .string(Dates.stamp.string(from: Date()))
         let id = emp["id"]?.string ?? ""
         let unit = emp["unit_id"]?.string ?? ""
+        Store.giveIds(&emp)
+        // устройство, которое уже у другого (карточка открыта со старыми данными), здесь не сохраняем — без двойников
+        let elsewhere = Set(allDevices.filter { $0.holder != id }.map(\.id))
+        for g in Store.deviceGroups {
+            if let list = emp[g]?.array { emp[g] = .array(list.filter { !elsewhere.contains($0["id"]?.string ?? "") }) }
+        }
+        let before = employee(id).map { devices(in: $0, holder: id) } ?? []
+        let after = devices(in: emp, holder: id)
+        let beforeIds = Set(before.map(\.id)), afterIds = Set(after.map(\.id))
+        let fio = Store.fio(emp), day = Dates.text(Date())
+        let added = after.filter { !beforeIds.contains($0.id) }
+            .map { DeviceEvent(id: Store.newId(), device: $0.id, date: day, kind: "new", text: "Выдан: " + fio) }
+        let removed = before.filter { !afterIds.contains($0.id) }.map { d in
+            trashed("device", deviceTitle(d), "у " + Store.short(fio), .object(d.item),
+                    extra: .object(["holder": .string(id), "group": .string(d.group)]))
+        }
         change { s in
             if emp["is_head"]?.bool == true {           // один руководитель на подразделение
                 for i in s.employees.indices where s.employees[i]["unit_id"]?.string == unit
@@ -319,14 +489,300 @@ final class Store: ObservableObject {
                 e["order"] = .number(Double((sibs.compactMap { Int($0["order"]?.string ?? "") }.max() ?? -1) + 1))
                 s.employees.append(e)
             }
+            s.deviceLog.append(contentsOf: added)
+            s.trash.append(contentsOf: removed)
         }
         return emp
     }
 
     func deleteEmployee(_ id: String) {
+        guard let e = employee(id) else { return }
+        let n = devices(of: id).count
+        let unit = units.first { $0.id == e["unit_id"]?.string }?.path ?? ""
+        let item = trashed("employee", Store.fio(e),
+                           [unit, n > 0 ? "техника: \(n)" : ""].filter { !$0.isEmpty }.joined(separator: " · "), .object(e))
         change(undoable: true) { s in
             s.employees.removeAll { $0["id"]?.string == id }
+            s.trash.append(item)
         }
+    }
+
+    /// Уволить: сотрудник уходит в архив учёта, его техника ждёт возврата, история остаётся.
+    func dismiss(_ id: String, on date: Date) {
+        guard let e = employee(id) else { return }
+        let devs = devices(of: id), fio = Store.fio(e), day = Dates.text(date)
+        change { s in
+            guard let i = s.employees.firstIndex(where: { $0["id"]?.string == id }) else { return }
+            s.employees[i]["dismissed"] = .string(day)
+            s.employees[i]["is_head"] = .bool(false)
+            s.employees[i]["onboarding"] = nil
+            s.employees[i]["updated"] = .string(Dates.stamp.string(from: Date()))
+            s.deviceLog.append(contentsOf: devs.map {
+                DeviceEvent(id: Store.newId(), device: $0.id, date: day, kind: "fired",
+                            text: "Владелец уволен: \(fio) — вернуть технику")
+            })
+        }
+    }
+
+    /// Отметки чек-листа нового сотрудника сохраняются сразу — это список дел, а не правка карточки.
+    func setOnboarding(_ id: String, _ steps: [JSON]) {
+        change { s in
+            guard let i = s.employees.firstIndex(where: { $0["id"]?.string == id }) else { return }
+            s.employees[i]["onboarding"] = .array(steps)
+        }
+    }
+
+    /// Вернуть уволенного на работу.
+    func rehire(_ id: String) {
+        change { s in
+            guard let i = s.employees.firstIndex(where: { $0["id"]?.string == id }) else { return }
+            s.employees[i]["dismissed"] = nil
+            s.employees[i]["updated"] = .string(Dates.stamp.string(from: Date()))
+        }
+    }
+
+    // ── техника ─────────────────────────────────────────────────────────────
+    /// Каждому устройству — свой id: по нему ведутся история, передача и корзина. true — что-то добавили.
+    @discardableResult
+    static func giveIds(_ holder: inout Dict) -> Bool {
+        var changed = false
+        for g in deviceGroups {
+            var list = holder[g]?.array ?? []
+            var touched = false
+            for i in list.indices {
+                guard case .object(var o) = list[i], (o["id"]?.string ?? "").isEmpty else { continue }
+                o["id"] = .string(newId())
+                list[i] = .object(o)
+                touched = true
+            }
+            if touched {
+                holder[g] = .array(list)
+                changed = true
+            }
+        }
+        return changed
+    }
+
+    private func devices(in holder: Dict, holder holderId: String) -> [DeviceRef] {
+        Store.deviceGroups.flatMap { g in
+            (holder[g]?.array ?? []).compactMap { j -> DeviceRef? in
+                let o = j.object
+                guard let id = o["id"]?.string, !id.isEmpty else { return nil }
+                return DeviceRef(id: id, group: g, holder: holderId, item: o)
+            }
+        }
+    }
+
+    /// Вся техника: у сотрудников (и уволенных — пока не сдали) и на складе.
+    var allDevices: [DeviceRef] {
+        state.employees.flatMap { devices(in: $0, holder: $0["id"]?.string ?? "") }
+            + devices(in: state.storeroom, holder: "")
+    }
+
+    /// Техника сотрудника или склада (holder пустой).
+    func devices(of holder: String) -> [DeviceRef] {
+        if holder.isEmpty { return devices(in: state.storeroom, holder: "") }
+        return employee(holder).map { devices(in: $0, holder: holder) } ?? []
+    }
+
+    func device(_ id: String) -> DeviceRef? { allDevices.first { $0.id == id } }
+
+    func holderName(_ holder: String) -> String {
+        holder.isEmpty ? "Склад" : (employee(holder).map { Store.short(Store.fio($0)) } ?? "удалённый сотрудник")
+    }
+
+    /// «Принтер · HP LaserJet»
+    func deviceTitle(_ d: DeviceRef) -> String {
+        let spec = meta?.devices[d.group]
+        return (spec?.singular ?? d.group) + Store.deviceSummary(d.item, spec)
+    }
+
+    /// « · HP LaserJet»: первое заполненное текстовое поле устройства.
+    static func deviceSummary(_ item: Dict, _ spec: DeviceSpec?) -> String {
+        guard let spec else { return "" }
+        let first = spec.fields.lazy.filter { $0.kind != "check" && $0.kind != "combo" }
+            .map { item[$0.key]?.string ?? "" }.first { !$0.isEmpty }
+        return first.map { " · " + $0 } ?? ""
+    }
+
+    /// Сколько дней до конца гарантии (меньше нуля — кончилась); nil — дата не указана.
+    static func warrantyDays(_ item: Dict, today: String) -> Int? {
+        guard let end = Dates.iso.date(from: item["warranty"]?.string ?? ""), let now = Dates.iso.date(from: today) else {
+            return nil
+        }
+        return Calendar(identifier: .gregorian).dateComponents([.day], from: now, to: end).day
+    }
+
+    /// Полных лет с покупки; nil — дата не указана.
+    static func age(_ item: Dict, today: String) -> Int? {
+        guard let b = Dates.iso.date(from: item["bought"]?.string ?? ""), let now = Dates.iso.date(from: today) else {
+            return nil
+        }
+        return Calendar(identifier: .gregorian).dateComponents([.year], from: b, to: now).year
+    }
+
+    /// История устройства: события и заявки отчёта по нему, свежие первыми.
+    func history(of id: String) -> [HistoryLine] {
+        let icons = ["new": "plus.circle.fill", "move": "arrow.left.arrow.right.circle.fill",
+                     "fired": "person.crop.circle.badge.xmark", "back": "arrow.uturn.backward.circle.fill"]
+        let events = state.deviceLog.filter { $0.device == id }.map {
+            HistoryLine(id: $0.id, date: $0.date, icon: icons[$0.kind] ?? "circle.fill", text: $0.text)
+        }
+        let repairs = state.entries.filter { $0.device == id }.map { e in
+            HistoryLine(id: e.uid, date: e.date, icon: "wrench.and.screwdriver.fill", text: Store.entryTitle(e),
+                        detail: [e.actions, e.result].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " → "))
+        }
+        return (events + repairs).enumerated()
+            .sorted { ($0.element.date, $0.offset) > ($1.element.date, $1.offset) }
+            .map(\.element)
+    }
+
+    /// Передать устройство сотруднику или на склад (holder пустой). В истории — отметка, от кого к кому.
+    func transfer(_ id: String, to holder: String) throws {
+        guard let d = device(id) else { throw APIError(message: "Устройство не найдено — возможно, его уже удалили.") }
+        guard d.holder != holder else { return }
+        if !holder.isEmpty {
+            guard let e = employee(holder) else { throw APIError(message: "Сотрудник не найден.") }
+            guard !Store.isDismissed(e) else {
+                throw APIError(message: "Этот сотрудник уволен — передайте технику другому или на склад.")
+            }
+        }
+        let text = "Передан: " + holderName(d.holder) + " → " + holderName(holder)
+        let stamp = Dates.stamp.string(from: Date())
+        change { s in
+            Store.take(id, from: &s, holder: d.holder)
+            Store.put(.object(d.item), group: d.group, into: &s, holder: holder)
+            for h in [d.holder, holder] where !h.isEmpty {
+                if let i = s.employees.firstIndex(where: { $0["id"]?.string == h }) { s.employees[i]["updated"] = .string(stamp) }
+            }
+            s.deviceLog.append(DeviceEvent(id: Store.newId(), device: id, date: Dates.text(Date()), kind: "move", text: text))
+        }
+    }
+
+    /// Уволенный сдал технику: вся она — на склад.
+    func returnAll(_ holder: String) {
+        for d in devices(of: holder) { try? transfer(d.id, to: "") }
+    }
+
+    private static func take(_ id: String, from s: inout LocalState, holder: String) {
+        func strip(_ h: inout Dict) {
+            for g in deviceGroups {
+                let list = h[g]?.array ?? []
+                let kept = list.filter { $0["id"]?.string != id }
+                if kept.count != list.count { h[g] = .array(kept) }
+            }
+        }
+        if holder.isEmpty {
+            strip(&s.storeroom)
+        } else if let i = s.employees.firstIndex(where: { $0["id"]?.string == holder }) {
+            strip(&s.employees[i])
+        }
+    }
+
+    /// Положить устройство к владельцу; владельца нет — на склад.
+    private static func put(_ item: JSON, group: String, into s: inout LocalState, holder: String) {
+        if !holder.isEmpty, let i = s.employees.firstIndex(where: { $0["id"]?.string == holder }) {
+            s.employees[i][group] = .array((s.employees[i][group]?.array ?? []) + [item])
+        } else {
+            s.storeroom[group] = .array((s.storeroom[group]?.array ?? []) + [item])
+        }
+    }
+
+    /// Техника того, на кого записана заявка (если ФИО совпало ровно с одним сотрудником).
+    func devices(forFio fio: String) -> [DeviceRef] {
+        let want = fio.split(separator: " ").joined(separator: " ").lowercased()
+        guard !want.isEmpty else { return [] }
+        let match = state.employees.filter { Store.fio($0).lowercased() == want }
+        guard match.count == 1, let id = match[0]["id"]?.string else { return [] }
+        return devices(of: id)
+    }
+
+    /// Возраст парка по дате покупки: вся техника, и на складе тоже.
+    func fleetAge() -> FleetAge {
+        var f = FleetAge()
+        let all = allDevices
+        for d in all {
+            switch Store.age(d.item, today: today) {
+            case nil: f.unknown += 1
+            case let y? where y < 3: f.young += 1
+            case let y? where y < 5: f.middle += 1
+            default: f.old += 1
+            }
+        }
+        f.oldest = Array(all.filter { (Store.age($0.item, today: today) ?? 0) >= 5 }
+            .sorted { ($0.item["bought"]?.string ?? "") < ($1.item["bought"]?.string ?? "") }
+            .prefix(5))
+        return f
+    }
+
+    // ── дни рождения и напоминания ──────────────────────────────────────────
+    /// Ближайший такой же день (месяц и число) начиная с сегодня. 29 февраля в обычный год — 1 марта.
+    private static func nextDay(_ md: DateComponents, from today: Date, _ cal: Calendar) -> Date? {
+        var c = DateComponents()
+        c.month = md.month
+        c.day = md.day
+        if cal.date(today, matchesComponents: c) { return today }
+        return cal.nextDate(after: today, matching: c, matchingPolicy: .nextTimePreservingSmallerComponents)
+    }
+
+    /// Дни рождения в ближайшие days дней (0 — только сегодня), у работающих.
+    func birthdays(within days: Int) -> [Birthday] {
+        let cal = Calendar(identifier: .gregorian), start = cal.startOfDay(for: Date())
+        return state.employees.filter { !Store.isDismissed($0) }.compactMap { e -> Birthday? in
+            guard let b = Dates.iso.date(from: e["birthday"]?.string ?? ""),
+                  let day = Store.nextDay(cal.dateComponents([.month, .day], from: b), from: start, cal) else { return nil }
+            let left = cal.dateComponents([.day], from: start, to: day).day ?? 0
+            return left <= days ? Birthday(id: e["id"]?.string ?? "", fio: Store.fio(e), day: day, days: left) : nil
+        }
+        .sorted { ($0.days, $0.fio) < ($1.days, $1.fio) }
+    }
+
+    private func plannedReminders() -> [Reminder.Planned] {
+        let cal = Calendar(identifier: .gregorian), start = cal.startOfDay(for: Date())
+        var out: [Reminder.Planned] = []
+        for e in state.employees where !Store.isDismissed(e) {
+            guard let b = Dates.iso.date(from: e["birthday"]?.string ?? ""),
+                  let day = Store.nextDay(cal.dateComponents([.month, .day], from: b), from: start, cal),
+                  let fire = cal.date(bySettingHour: 9, minute: 0, second: 0, of: day) else { continue }
+            out.append(Reminder.Planned(id: "birthday-" + (e["id"]?.string ?? ""), fire: fire, kind: .birthday,
+                                        title: "День рождения", body: "Сегодня день рождения: \(Store.fio(e))"))
+        }
+        for d in allDevices {
+            let w = d.item["warranty"]?.string ?? ""
+            guard let end = Dates.iso.date(from: w), let before = cal.date(byAdding: .day, value: -30, to: end),
+                  let fire = cal.date(bySettingHour: 10, minute: 0, second: 0, of: before) else { continue }
+            out.append(Reminder.Planned(id: "warranty-" + d.id, fire: fire, kind: .warranty,
+                                        title: "Через месяц кончается гарантия",
+                                        body: "\(deviceTitle(d)) — \(holderName(d.holder)). Гарантия до \(Readable.date(w))."))
+        }
+        return out
+    }
+
+    // ── чек-лист нового сотрудника ──────────────────────────────────────────
+    static let defaultChecklist = ["Создать учётную запись и почту", "Выдать и настроить компьютер", "Подключить принтер",
+                                   "Добавить в группы и сетевые папки"]
+
+    var checklist: [String] { state.checklist ?? Store.defaultChecklist }
+
+    func setChecklist(_ list: [String]) {
+        let clean = list.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        guard clean != checklist else { return }
+        change { s in s.checklist = clean }
+    }
+
+    /// Чек-лист закрыт: отмеченное уходит в отчёт одной заявкой, чек-лист из карточки убирается.
+    @discardableResult
+    func finishOnboarding(_ e: Dict) throws -> Dict {
+        let done = (e["onboarding"]?.array ?? []).filter { $0["done"]?.bool == true }
+            .map { $0["step"]?.string ?? "" }.filter { !$0.isEmpty }
+        guard !done.isEmpty else { throw APIError(message: "Отметьте хотя бы один пункт чек-листа.") }
+        var emp = e
+        emp["onboarding"] = nil
+        let saved = saveEmployee(emp)
+        try saveEntry(uid: nil, date: Dates.workday(Date()), employee: Store.fio(saved),
+                      description: "Подготовка рабочего места для нового сотрудника",
+                      actions: done.joined(separator: "; "), result: "Рабочее место готово")
+        return saved
     }
 
     // ── отчёт ───────────────────────────────────────────────────────────────
@@ -336,7 +792,11 @@ final class Store: ObservableObject {
         return state.entries.filter { $0.date >= from && $0.date <= to }
     }
 
-    /// Подсказки для «Сотрудник / объект»: частые прошлые значения, потом сотрудники из учёта.
+    static func entryTitle(_ e: Entry) -> String {
+        [e.description, e.actions, e.result].compactMap { $0 }.first { !$0.isEmpty } ?? "Запись без текста"
+    }
+
+    /// Подсказки для «Сотрудник / объект»: частые прошлые значения, потом работающие сотрудники из учёта.
     var employeeSuggestions: [String] {
         var freq: [String: Int] = [:]
         for e in state.entries {
@@ -345,7 +805,7 @@ final class Store: ObservableObject {
         }
         var out = freq.sorted { ($0.value, $1.key) > ($1.value, $0.key) }.map(\.key)
         var seen = Set(out)
-        for e in state.employees {
+        for e in state.employees where !Store.isDismissed(e) {
             let f = Store.fio(e)
             if !f.hasPrefix("("), seen.insert(f).inserted { out.append(f) }
         }
@@ -353,21 +813,29 @@ final class Store: ObservableObject {
     }
 
     func saveEntry(uid: String?, date: Date, employee: String, description: String,
-                   actions: String, result: String) throws {
+                   actions: String, result: String, device: String = "") throws {
         let t = { (s: String) in s.trimmingCharacters(in: .whitespacesAndNewlines) }
         let f = [t(employee), t(description), t(actions), t(result)]
         guard f.contains(where: { !$0.isEmpty }) else { throw APIError(message: "Заполните хотя бы одно поле.") }
         let wd = Calendar(identifier: .gregorian).component(.weekday, from: date)
         guard (2...6).contains(wd) else { throw APIError(message: "Выберите день с понедельника по пятницу.") }
         let id = uid ?? String(Store.newId().prefix(8))
-        let entry = Entry(uid: id, date: Dates.text(date), employee: f[0], description: f[1], actions: f[2], result: f[3])
+        let entry = Entry(uid: id, date: Dates.text(date), employee: f[0], description: f[1], actions: f[2], result: f[3],
+                          device: device.isEmpty ? nil : device)
         change { s in
             if let i = s.entries.firstIndex(where: { $0.uid == id }) { s.entries[i] = entry } else { s.entries.append(entry) }
         }
     }
 
     func deleteEntries(_ uids: [String]) {
-        change(undoable: true) { s in s.entries.removeAll { uids.contains($0.uid) } }
+        let items = state.entries.filter { uids.contains($0.uid) }.map { e in
+            trashed("entry", Store.entryTitle(e),
+                    [Readable.date(e.date), e.employee ?? ""].filter { !$0.isEmpty }.joined(separator: " · "), asJSON(e))
+        }
+        change(undoable: true) { s in
+            s.entries.removeAll { uids.contains($0.uid) }
+            s.trash.append(contentsOf: items)
+        }
     }
 
     /// Поиск по всему отчёту: в записи должны встретиться все слова запроса (дата — как «05.11.2026»).
@@ -405,7 +873,7 @@ final class Store: ObservableObject {
             if !person.isEmpty { who[person, default: 0] += 1 }
             if !problem.isEmpty { what[problem, default: 0] += 1 }
         }
-        let byId = Dictionary(people.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let byId = Dictionary(everyone.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         for c in carts {
             let unit = byId[c.employee_id ?? ""]?.unit ?? ""
             units[unit.isEmpty ? "Без отдела" : unit, default: 0] += c.qty
@@ -443,8 +911,13 @@ final class Store: ObservableObject {
 
     /// Шаблон картриджа не удаляется: по нему выдача сама пишет запись в отчёт.
     func deleteTemplates(_ ids: Set<String>) {
+        let items = templates.filter { ids.contains($0.id) && $0.id != EntryTemplate.cartridgeId }
+            .map { trashed("template", $0.name, "шаблон заявки", asJSON($0)) }
         let list = templates.filter { !ids.contains($0.id) || $0.id == EntryTemplate.cartridgeId }
-        change(undoable: true) { s in s.templates = list }
+        change(undoable: true) { s in
+            s.templates = list
+            s.trash.append(contentsOf: items)
+        }
     }
 
     func moveTemplates(from: IndexSet, to: Int) {
@@ -457,14 +930,13 @@ final class Store: ObservableObject {
     static func cartEntryId(_ cartId: Int) -> String { "cart\(cartId)" }
 
     // ── картриджи ───────────────────────────────────────────────────────────
-    /// Сотрудники из учёта — по ним ведётся счёт выдач (как cartridges.people).
-    var people: [Person] {
+    private func persons(_ list: [Dict]) -> [Person] {
         let all = units
         let byId = Dictionary(all.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         // единственное подразделение верхнего уровня — сама организация, отделом её не называем;
         // если их несколько, каждое — отдел
         let org = all.filter { $0.depth == 0 }.count == 1
-        return state.employees
+        return list
             .filter { e in ["last_name", "first_name", "middle_name"].contains { !(e[$0]?.string ?? "").isEmpty } }
             .map { e in
                 let u = byId[e["unit_id"]?.string ?? ""]
@@ -473,6 +945,12 @@ final class Store: ObservableObject {
             }
             .sorted { $0.fio.lowercased() < $1.fio.lowercased() }
     }
+
+    /// Работающие сотрудники — им выдают картриджи (как cartridges.people).
+    var people: [Person] { persons(state.employees.filter { !Store.isDismissed($0) }) }
+
+    /// Все из учёта, и уволенные: по ним показываются прошлые выдачи.
+    private var everyone: [Person] { persons(state.employees) }
 
     /// Модели, которые уже выдавались, — частые первыми.
     var models: [String] {
@@ -484,7 +962,7 @@ final class Store: ObservableObject {
     func carts(year: Int, month: Int, query: String) -> (items: [CartItem], label: String) {
         let prefix = month == 0 ? String(format: "%04d-", year) : String(format: "%04d-%02d-", year, month)
         let label = month == 0 ? "\(year) год" : "\(Dates.months[month - 1]) \(year)"
-        let byId = Dictionary(people.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let byId = Dictionary(everyone.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let tokens = query.lowercased().split(separator: " ").map(String.init)
         let items = state.carts
             .filter { $0.issued_at.hasPrefix(prefix) }
@@ -534,6 +1012,17 @@ final class Store: ObservableObject {
         let people = findPeople(name)
         guard !name.isEmpty, Set(people.map(\.id)).count <= 1 else { return [] }
         return cartHistory(id: people.first?.id ?? "", name: people.first?.fio ?? name)
+    }
+
+    /// Картриджи принтеров того, кто набран в «Кто забрал» (если под набранное подходит один человек).
+    func printerCartridges(typed who: String) -> [String] {
+        let found = findPeople(who)
+        guard Set(found.map(\.id)).count == 1, let p = found.first else { return [] }
+        var seen = Set<String>()
+        return devices(of: p.id).filter { $0.group == "printers" }.compactMap { d -> String? in
+            let c = (d.item["cartridge"]?.string ?? "").trimmingCharacters(in: .whitespaces)
+            return c.isEmpty || !seen.insert(c.lowercased()).inserted ? nil : c
+        }
     }
 
     /// Для карточки сотрудника.
@@ -596,9 +1085,18 @@ final class Store: ObservableObject {
     /// Вместе с выдачей уходит и заявка, которую она добавила в отчёт.
     func deleteCarts(_ ids: [Int]) {
         let uids = ids.map { Store.cartEntryId($0) }
+        let byId = Dictionary(everyone.map { ($0.id, $0.fio) }, uniquingKeysWith: { a, _ in a })
+        let items = state.carts.filter { ids.contains($0.id) }.map { c -> TrashItem in
+            let auto = state.entries.first { $0.uid == Store.cartEntryId(c.id) }
+            let who = byId[c.employee_id ?? ""] ?? (c.employee ?? "")
+            return trashed("cart", "\(c.model) × \(c.qty)",
+                           [who, Readable.date(c.issued_at)].filter { !$0.isEmpty }.joined(separator: " · "),
+                           asJSON(c), extra: auto.map { asJSON($0) })
+        }
         change(undoable: true) { s in
             s.carts.removeAll { ids.contains($0.id) }
             s.entries.removeAll { uids.contains($0.uid) }
+            s.trash.append(contentsOf: items)
         }
     }
 
@@ -608,10 +1106,125 @@ final class Store: ObservableObject {
             .map(\.element)
     }
 
+    // ── корзина ─────────────────────────────────────────────────────────────
+    private func trashed(_ kind: String, _ title: String, _ subtitle: String, _ payload: JSON,
+                         extra: JSON? = nil) -> TrashItem {
+        TrashItem(id: Store.newId(), kind: kind, deleted: Date(), title: title.isEmpty ? "Без названия" : title,
+                  subtitle: subtitle, payload: payload, extra: extra)
+    }
+
+    /// Удалённое старше 30 дней уходит насовсем.
+    private func purgeTrash() {
+        let limit = Date().addingTimeInterval(-30 * 24 * 3600)
+        guard state.trash.contains(where: { $0.deleted < limit }) else { return }
+        state.trash.removeAll { $0.deleted < limit }
+        persist()
+    }
+
+    func emptyTrash() {
+        change { s in s.trash = [] }
+    }
+
+    /// Вернуть из корзины. Возвращает текст для плашки.
+    func restore(trash id: String) throws -> String {
+        guard let t = state.trash.first(where: { $0.id == id }) else { throw APIError(message: "В корзине этого уже нет.") }
+        let broken = APIError(message: "Это в корзине повреждено — вернуть не получится.")
+        switch t.kind {
+        case "entry":
+            guard let e = fromJSON(t.payload, as: Entry.self) else { throw broken }
+            guard !state.entries.contains(where: { $0.uid == e.uid }) else {
+                throw APIError(message: "Эта запись уже есть в отчёте.")
+            }
+            change { s in
+                s.entries.append(e)
+                s.trash.removeAll { $0.id == id }
+            }
+            return "Запись вернулась в отчёт"
+        case "employee":
+            var e = t.payload.object
+            guard let eid = e["id"]?.string, !eid.isEmpty else { throw broken }
+            guard employee(eid) == nil else { throw APIError(message: "Этот сотрудник уже есть в учёте.") }
+            // его технику за это время могли вернуть отдельно — без двойников
+            let taken = Set(allDevices.map(\.id))
+            for g in Store.deviceGroups {
+                if let list = e[g]?.array { e[g] = .array(list.filter { !taken.contains($0["id"]?.string ?? "") }) }
+            }
+            Store.giveIds(&e)
+            change { s in
+                s.employees.append(e)
+                s.trash.removeAll { $0.id == id }
+            }
+            return "Сотрудник вернулся в учёт"
+        case "cart":
+            guard var c = fromJSON(t.payload, as: CartRaw.self) else { throw broken }
+            var auto = t.extra.flatMap { fromJSON($0, as: Entry.self) }
+            if state.carts.contains(where: { $0.id == c.id }) {       // номер успели занять — даём новый
+                c.id = (state.carts.map(\.id).max() ?? 0) + 1
+                if let a = auto {
+                    auto = Entry(uid: Store.cartEntryId(c.id), date: a.date, employee: a.employee,
+                                 description: a.description, actions: a.actions, result: a.result, device: a.device)
+                }
+            }
+            change { s in
+                s.carts.append(c)
+                if let a = auto, !s.entries.contains(where: { $0.uid == a.uid }) { s.entries.append(a) }
+                s.trash.removeAll { $0.id == id }
+            }
+            return "Выдача вернулась"
+        case "template":
+            guard let tpl = fromJSON(t.payload, as: EntryTemplate.self) else { throw broken }
+            var list = templates
+            if !list.contains(where: { $0.id == tpl.id }) { list.insert(tpl, at: 0) }
+            change { s in
+                s.templates = list
+                s.trash.removeAll { $0.id == id }
+            }
+            return "Шаблон вернулся"
+        case "unit":
+            let u = t.payload.object
+            guard let uid = u["id"]?.string, !uid.isEmpty else { throw broken }
+            change { s in
+                if !s.units.contains(where: { $0["id"]?.string == uid }) { s.units.append(u) }
+                s.trash.removeAll { $0.id == id }
+            }
+            return "Подразделение вернулось"
+        case "device":
+            let did = t.payload["id"]?.string ?? ""
+            guard !did.isEmpty else { throw broken }
+            guard device(did) == nil else { throw APIError(message: "Это устройство уже есть в учёте.") }
+            let group = t.extra?["group"]?.string ?? "pcs"
+            var holder = t.extra?["holder"]?.string ?? ""
+            // владельца удалили или уволили — устройство возвращается на склад
+            if !holder.isEmpty, employee(holder).map({ Store.isDismissed($0) }) ?? true { holder = "" }
+            let name = holderName(holder)
+            change { s in
+                Store.put(t.payload, group: group, into: &s, holder: holder)
+                s.deviceLog.append(DeviceEvent(id: Store.newId(), device: did, date: Dates.text(Date()), kind: "back",
+                                               text: "Вернули из корзины: \(name)"))
+                s.trash.removeAll { $0.id == id }
+            }
+            return holder.isEmpty ? "Устройство вернулось на склад" : "Устройство вернулось: \(name)"
+        default:
+            throw broken
+        }
+    }
+
     // ── бэкап в телеграм ────────────────────────────────────────────────────
     var backupDue: Bool {
         guard let last = state.lastBackup else { return true }
-        return Date().timeIntervalSince(last) > 7 * 24 * 3600
+        switch state.backupEvery {
+        case "day": return Dates.text(last) != Dates.text(Date())
+        // после изменений, но не чаще раза в 10 минут: иначе каждое сворачивание приложения слало бы файл
+        case "change": return (state.changedAt ?? .distantPast) > last && Date().timeIntervalSince(last) > 10 * 60
+        default: return Date().timeIntervalSince(last) > 7 * 24 * 3600
+        }
+    }
+
+    /// Пора проверить, что последний бэкап в группе читается: раз в месяц.
+    var checkDue: Bool {
+        guard !state.backupFileId.isEmpty else { return false }
+        guard let last = state.lastCheck else { return true }
+        return Date().timeIntervalSince(last) > 30 * 24 * 3600
     }
 
     var isEmpty: Bool { state.employees.isEmpty && state.entries.isEmpty && state.carts.isEmpty }
@@ -625,13 +1238,27 @@ final class Store: ObservableObject {
         persist()
     }
 
+    func setBackupEvery(_ every: String) {
+        guard every != state.backupEvery else { return }
+        state.backupEvery = every
+        persist()
+    }
+
+    func setBackupEncrypt(_ on: Bool) {
+        guard on != state.backupEncrypt else { return }
+        state.backupEncrypt = on
+        persist()
+    }
+
     func backupFile() -> BackupFile {
         BackupFile(note: BackupFile.readme, app: "REPORTER", exported_at: Dates.stamp.string(from: Date()), meta: meta,
                    units: state.units, employees: state.employees, entries: state.entries, cartridges: state.carts,
-                   templates: state.templates)
+                   templates: state.templates, storeroom: state.storeroom, device_log: state.deviceLog,
+                   checklist: state.checklist)
     }
 
-    /// Раз в неделю при открытии (или по кнопке): Excel для чтения и JSON для восстановления — в группу.
+    /// По расписанию при открытии и сворачивании (или по кнопке): Excel для чтения и JSON для восстановления —
+    /// в группу. С шифрованием — один зашифрованный файл: Excel без пароля прочитал бы любой в группе.
     func backup(force: Bool = false) async {
         guard !backingUp, force || backupDue else { return }
         guard !state.backupToken.isEmpty, !state.backupChat.isEmpty else {
@@ -642,25 +1269,73 @@ final class Store: ObservableObject {
             if force { backupStatus = "Пока нечего сохранять — данных нет." }
             return
         }
+        let password = Keychain.get(BackupCrypto.passwordKey)
+        if state.backupEncrypt && password.count < 8 {
+            backupStatus = "Бэкап не отправлен: шифрование включено, а пароль бэкапа короче 8 знаков."
+            return
+        }
         backingUp = true
         defer { backingUp = false }
         let b = backupFile()
         let day = Dates.text(Date())
         do {
             let json = try b.json()
-            try await Telegram.send(token: state.backupToken, chat: state.backupChat, file: Readable.xlsx(b),
-                                    name: "REPORTER_бэкап_\(day).xlsx",
-                                    mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    caption: "REPORTER · бэкап \(b.exported_at ?? day)\n\(b.stats)\n"
-                                        + "Excel — чтобы читать, JSON — чтобы восстановить в приложении.")
-            try await Telegram.send(token: state.backupToken, chat: state.backupChat, file: json,
-                                    name: "REPORTER_бэкап_\(day).json", mime: "application/json", caption: nil)
+            let fileId: String
+            if state.backupEncrypt {
+                fileId = try await Telegram.send(token: state.backupToken, chat: state.backupChat,
+                                                 file: BackupCrypto.encrypt(json, password: password),
+                                                 name: "REPORTER_бэкап_\(day).reporter", mime: "application/octet-stream",
+                                                 caption: "REPORTER · бэкап \(b.exported_at ?? day), зашифрован\n\(b.stats)\n"
+                                                    + "Восстановить: Настройки → «Восстановить из бэкапа», нужен пароль бэкапа.")
+            } else {
+                try await Telegram.send(token: state.backupToken, chat: state.backupChat, file: Readable.xlsx(b),
+                                        name: "REPORTER_бэкап_\(day).xlsx",
+                                        mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                        caption: "REPORTER · бэкап \(b.exported_at ?? day)\n\(b.stats)\n"
+                                            + "Excel — чтобы читать, JSON — чтобы восстановить в приложении.")
+                fileId = try await Telegram.send(token: state.backupToken, chat: state.backupChat, file: json,
+                                                 name: "REPORTER_бэкап_\(day).json", mime: "application/json", caption: nil)
+            }
             state.lastBackup = Date()
+            state.backupFileId = fileId
+            state.backupSent = b.stats
             persist()
             backupStatus = "Бэкап отправлен в группу"
         } catch {
             backupStatus = "Бэкап не отправлен: \(error.localizedDescription)"
         }
+    }
+
+    /// Скачать последний бэкап из группы и прочитать его, как при восстановлении: раз в месяц или по кнопке.
+    func verifyBackup(force: Bool = false) async {
+        guard !checking, !backingUp, force || checkDue else { return }
+        guard !state.backupToken.isEmpty, !state.backupFileId.isEmpty else {
+            if force { backupStatus = "Проверять пока нечего: сначала отправьте бэкап." }
+            return
+        }
+        checking = true
+        defer { checking = false }
+        let expected = state.backupSent
+        do {
+            var data = try await Telegram.download(token: state.backupToken, fileId: state.backupFileId)
+            if BackupCrypto.isEncrypted(data) {
+                data = try BackupCrypto.decrypt(data, password: Keychain.get(BackupCrypto.passwordKey))
+            }
+            let b = try BackupFile.read(data)
+            state.checkOK = expected.isEmpty || b.stats == expected
+            state.checkResult = state.checkOK ? "Бэкап от \(b.exported_at ?? "?") читается: \(b.stats)"
+                : "Бэкап читается, но в нём не всё: \(b.stats), а отправляли \(expected)"
+        } catch is URLError {
+            // нет связи — это не про бэкап: проверим в следующий раз
+            if force { backupStatus = "Нет связи с Telegram — проверьте интернет и попробуйте ещё раз." }
+            return
+        } catch {
+            state.checkOK = false
+            state.checkResult = "Бэкап не прочитался: \(error.localizedDescription)"
+        }
+        state.lastCheck = Date()
+        persist()
+        if force { backupStatus = state.checkResult }
     }
 
     /// Заменить все данные в телефоне данными из бэкапа. Настройки бота остаются.
@@ -673,6 +1348,11 @@ final class Store: ObservableObject {
             s.entries = b.entries
             s.carts = b.cartridges
             if let t = b.templates { s.templates = t }      // в старых бэкапах шаблонов нет — остаются свои
+            s.storeroom = b.storeroom ?? [:]
+            s.deviceLog = b.device_log ?? []
+            if let c = b.checklist { s.checklist = c }
+            for i in s.employees.indices { Store.giveIds(&s.employees[i]) }
+            Store.giveIds(&s.storeroom)
         }
         restores += 1
         backupStatus = "Восстановлено: \(b.stats)"

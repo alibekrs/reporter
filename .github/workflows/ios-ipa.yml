@@ -66,7 +66,7 @@ jobs:
       matrix:
         name: ${{ fromJSON(inputs.ios26 && '["ios27", "ios26"]' || '["ios27"]') }}
     runs-on: ${{ matrix.name == 'ios26' && 'macos-26' || 'xcode-27' }}
-    timeout-minutes: 75                # медленная машина: проход ~35 мин + загрузка симулятора ~6 мин
+    timeout-minutes: 120               # медленная машина: проход ~55 мин + загрузка симулятора ~6 мин
     defaults:
       run:
         working-directory: ios

@@ -25,6 +25,7 @@ struct HomeView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     Text(today).font(.subheadline).foregroundStyle(.secondary).rise(shown, 0)
+                    birthdays.rise(shown, 0.03)
                     quoteCard.rise(shown, 0.05)
                     weekCard.rise(shown, 0.12)
                     tiles.rise(shown, 0.19)
@@ -41,6 +42,33 @@ struct HomeView: View {
         .onAppear { if ready { start() } }
         .onChange(of: ready) { _, r in if r { start() } }
         .onChange(of: store.today) { _, _ in quote = Quotes.todayIndex }     // новый день — новая мысль дня
+    }
+
+    // ── дни рождения ────────────────────────────────────────────────────────
+    /// Сегодня и в ближайшую неделю; нажатие — к сотрудникам.
+    @ViewBuilder private var birthdays: some View {
+        let list = store.birthdays(within: 7)
+        if !list.isEmpty {
+            Button { tab = .assets } label: {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "gift.fill").font(.title2).foregroundStyle(Brand.sun)
+                        .symbolEffect(.bounce, value: shown)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(list[0].days == 0 ? "ДЕНЬ РОЖДЕНИЯ СЕГОДНЯ" : "СКОРО ДЕНЬ РОЖДЕНИЯ")
+                            .font(.caption2.weight(.bold)).foregroundStyle(Brand.gold)
+                        ForEach(list.prefix(3)) { b in
+                            Text("\(b.fio) — " + (b.days == 0 ? "сегодня" : Dates.shortHuman.string(from: b.day)))
+                                .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                                .multilineTextAlignment(.leading)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(14)
+                .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            }
+            .buttonStyle(PressStyle())
+        }
     }
 
     // ── сводка ──────────────────────────────────────────────────────────────
@@ -184,8 +212,9 @@ struct HomeView: View {
         let weekAgo = Dates.text(Calendar.current.date(byAdding: .day, value: -6, to: Date())!)
         let monthQty = store.state.carts.filter { $0.issued_at.hasPrefix(month) }.reduce(0) { $0 + $1.qty }
         let weekQty = store.state.carts.filter { $0.issued_at >= weekAgo }.reduce(0) { $0 + $1.qty }
-        let staff = store.state.employees.count
-        let bad = store.state.employees.filter { trouble($0) > 0 }.count
+        let working = store.state.employees.filter { !Store.isDismissed($0) }
+        let staff = working.count
+        let bad = working.filter { trouble($0) > 0 }.count
         return HStack(spacing: 12) {
             HomeTile(title: "Картриджи · " + HomeView.monthName.string(from: Date()), value: monthQty,
                      chip: weekQty > 0 ? "+\(weekQty) за неделю" : "за неделю 0", good: true) { tab = .carts }

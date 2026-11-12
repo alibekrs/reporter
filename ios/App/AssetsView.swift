@@ -1,5 +1,6 @@
 import SwiftUI
 
+// как Store.deviceGroups; своя копия — глобальная константа не может читать Store, он живёт на главном потоке
 private let deviceGroups = ["pcs", "monitors", "phones", "printers"]
 private let groupIcons = ["pcs": "desktopcomputer", "monitors": "display", "phones": "phone", "printers": "printer"]
 
@@ -16,6 +17,9 @@ private func deviceCount(_ e: Dict) -> Int {
 }
 
 struct AssetsView: View {
+    /// Строка «Склад» в навигации учёта — не id сотрудника.
+    static let storeroomPath = "storeroom"
+
     @EnvironmentObject private var store: Store
     @State private var query = ""
     @State private var path: [String] = []
@@ -31,7 +35,9 @@ struct AssetsView: View {
             // и сдвигал страницу — держим мелким всегда
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: String.self) { id in
-                if let start = store.employee(id) ?? draft, let meta = store.meta {
+                if id == AssetsView.storeroomPath {
+                    StoreroomView()
+                } else if let start = store.employee(id) ?? draft, let meta = store.meta {
                     EmployeeView(initial: start, meta: meta) { toast = $0 }
                 }
             }
@@ -54,12 +60,14 @@ struct AssetsView: View {
         let groups = (store.units.map { UnitGroup(unit: $0, emps: store.employees(in: $0.id, matching: query)) } + [lost])
             .filter { !$0.emps.isEmpty }
         let all = groups.flatMap(\.emps)
+        let stock = store.devices(of: "").count
+        let fired = store.dismissed(matching: query)
         return List {
             Section {
                 HStack(spacing: 10) {
                     StatCard(title: plural(all.count, "сотрудник", "сотрудника", "сотрудников"),
                              value: all.count, icon: "person.2.fill", color: Brand.blue)
-                    StatCard(title: "техники", value: all.reduce(0) { $0 + deviceCount($1) },
+                    StatCard(title: "техники", value: all.reduce(stock) { $0 + deviceCount($1) },
                              icon: "desktopcomputer", color: .teal)
                     StatCard(title: "с проблемой", value: all.filter { trouble($0) > 0 }.count,
                              icon: "exclamationmark.triangle.fill", color: .orange)
@@ -82,7 +90,29 @@ struct AssetsView: View {
                     }
                 }
             }
-            if all.isEmpty {
+            if stock > 0 && query.isEmpty {
+                Section {
+                    NavigationLink(value: AssetsView.storeroomPath) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "shippingbox.fill").font(.title3).foregroundStyle(.brown)
+                                .frame(width: 40, height: 40)
+                            Text("Склад")
+                            Spacer()
+                            Text("\(stock)").monospacedDigit().foregroundStyle(.secondary)
+                        }
+                    }
+                } footer: {
+                    Text("Техника без хозяина: сданная уволенными или ещё не выданная.")
+                }
+            }
+            if !fired.isEmpty {
+                Section("Уволенные") {
+                    ForEach(fired, id: \.["id"]) { e in
+                        NavigationLink(value: e["id"]?.string ?? "") { EmployeeRow(e: e) }
+                    }
+                }
+            }
+            if all.isEmpty && fired.isEmpty {
                 if query.isEmpty {
                     ContentUnavailableView("Учёт пуст", systemImage: "person.crop.rectangle.stack",
                                            description: Text("Добавьте первого сотрудника кнопкой «+»."))
@@ -140,7 +170,7 @@ struct EmployeeRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Avatar(name: Store.fio(e))
+            Avatar(name: Store.fio(e)).opacity(Store.isDismissed(e) ? 0.45 : 1)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(Store.fio(e)).lineLimit(1)
@@ -171,6 +201,10 @@ struct EmployeeRow: View {
     }
 
     private var subtitle: String {
+        if Store.isDismissed(e) {
+            let n = deviceCount(e)
+            return "уволен \(Readable.date(e["dismissed"]?.string ?? ""))" + (n > 0 ? " · техника не сдана" : "")
+        }
         let office = e["office"]?.string ?? ""
         let parts: [String] = [e["position"]?.string ?? "", office.isEmpty ? "" : "каб. " + office]
         return parts.filter { !$0.isEmpty }.joined(separator: " · ")
@@ -185,6 +219,9 @@ struct EmployeeView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var emp: Dict
     @State private var confirmDelete = false
+    @State private var confirmDismiss = false
+    @State private var opened: DeviceRef?
+    @State private var error: String?
 
     init(initial: Dict, meta: Meta, onSaved: @escaping (String) -> Void) {
         _emp = State(initialValue: initial)
@@ -204,10 +241,17 @@ struct EmployeeView: View {
                         Text(Store.fio(emp)).font(.headline).contentTransition(.opacity)
                         Text(store.units.first { $0.id == emp["unit_id"]?.string }?.path ?? "")
                             .font(.caption).foregroundStyle(.secondary)
+                        if Store.isDismissed(emp) {
+                            Text("Уволен \(Readable.date(emp["dismissed"]?.string ?? ""))")
+                                .font(.caption.weight(.bold)).foregroundStyle(.orange)
+                                .padding(.horizontal, 7).padding(.vertical, 2)
+                                .background(Color.orange.opacity(0.15), in: Capsule())
+                        }
                     }
                 }
                 .listRowBackground(Color.clear)
             }
+            onboarding
             if !isNew { history }
             Section("Сотрудник") {
                 TextField("Фамилия", text: textBinding($emp, "last_name"))
@@ -221,6 +265,26 @@ struct EmployeeView: View {
                 }
                 Toggle("Руководитель", isOn: Binding(get: { emp["is_head"]?.bool ?? false },
                                                     set: { emp["is_head"] = .bool($0) }))
+                OptionalDateRow(label: "День рождения", value: textBinding($emp, "birthday"))
+            }
+            Section("Связь") {
+                HStack {
+                    TextField("Телефон", text: textBinding($emp, "phone")).keyboardType(.phonePad)
+                    if let url = telURL {
+                        Link(destination: url) { Image(systemName: "phone.fill") }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Позвонить")
+                    }
+                }
+                HStack {
+                    TextField("Почта", text: textBinding($emp, "email"))
+                        .keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    if let url = mailURL {
+                        Link(destination: url) { Image(systemName: "envelope.fill") }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Написать письмо")
+                    }
+                }
             }
             Section("Место и учётка") {
                 TextField("Здание", text: textBinding($emp, "building"))
@@ -242,11 +306,7 @@ struct EmployeeView: View {
             if let upd = emp["updated"]?.string, !upd.isEmpty {
                 Section { Text("Изменено: " + upd).font(.caption).foregroundStyle(.secondary) }
             }
-            if !isNew {
-                Section {
-                    Button("Удалить сотрудника", role: .destructive) { confirmDelete = true }
-                }
-            }
+            if !isNew { actions }
         }
         .clearsBar()
         .keyboardDone()
@@ -267,7 +327,122 @@ struct EmployeeView: View {
                 onSaved(Toast.deleted)
                 dismiss()
             }
+        } message: {
+            Text("Карточка полежит в корзине 30 дней. Если человек просто ушёл — лучше «Уволить»: история останется.")
         }
+        .confirmationDialog("Уволить сотрудника?", isPresented: $confirmDismiss, titleVisibility: .visible) {
+            let has = !store.devices(of: id).isEmpty || deviceCount(emp) > 0
+            if has {
+                Button("Уволить, техника — на склад") {
+                    commit("Уволен, техника на складе") {
+                        store.dismiss(id, on: Date())
+                        store.returnAll(id)
+                    }
+                }
+            }
+            Button(has ? "Уволить, техника пока за ним" : "Да, уволить") {
+                commit("Уволен — карточка в «Уволенных»") { store.dismiss(id, on: Date()) }
+            }
+        } message: {
+            Text("Карточка уйдёт в «Уволенные» внизу учёта, история останется.")
+        }
+        .sheet(item: $opened, onDismiss: { emp = store.employee(id) ?? emp }) { d in
+            DeviceSheet(deviceId: d.id).presentationCornerRadius(24)
+        }
+        .errorAlert($error)
+    }
+
+    // ── чек-лист нового сотрудника ──────────────────────────────────────────
+    @ViewBuilder private var onboarding: some View {
+        let steps = emp["onboarding"]?.array ?? []
+        if !isNew, !steps.isEmpty {
+            Section {
+                ForEach(steps.indices, id: \.self) { i in
+                    let done = steps[i]["done"]?.bool ?? false
+                    Button { toggleStep(i) } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: done ? "checkmark.circle.fill" : "circle")
+                                .font(.title3)
+                                .foregroundStyle(done ? Color.green : Color.secondary)
+                            Text(steps[i]["step"]?.string ?? "")
+                                .strikethrough(done)
+                                .foregroundStyle(done ? Color.secondary : Color.primary)
+                        }
+                    }
+                    .tint(.primary)
+                    .accessibilityValue(done ? "сделано" : "не сделано")
+                }
+                Button { finishOnboarding() } label: {
+                    Label("Готово — записать в отчёт", systemImage: "checkmark.seal.fill").bold()
+                }
+                .disabled(!steps.contains { $0["done"]?.bool == true })
+            } header: {
+                Text("Чек-лист нового сотрудника")
+            } footer: {
+                Text("Отметки сохраняются сразу. «Готово» записывает сделанное в отчёт и убирает чек-лист из карточки.")
+            }
+        }
+    }
+
+    private func toggleStep(_ i: Int) {
+        var steps = emp["onboarding"]?.array ?? []
+        guard i < steps.count else { return }
+        var o = steps[i].object
+        o["done"] = .bool(!(o["done"]?.bool ?? false))
+        steps[i] = .object(o)
+        withAnimation(.snappy) { emp["onboarding"] = .array(steps) }
+        store.setOnboarding(id, steps)
+    }
+
+    private func finishOnboarding() {
+        hideKeyboard()
+        do {
+            emp = try store.finishOnboarding(emp)
+            onSaved("Чек-лист записан в отчёт")
+        } catch { self.error = error.localizedDescription }
+    }
+
+    // ── уволить, вернуть, удалить ───────────────────────────────────────────
+    @ViewBuilder private var actions: some View {
+        Section {
+            if Store.isDismissed(emp) {
+                if deviceCount(emp) > 0 {
+                    Button {
+                        commit("Техника — на складе") { store.returnAll(id) }
+                    } label: { Label("Технику сдали — всё на склад", systemImage: "shippingbox.and.arrow.backward") }
+                }
+                Button {
+                    commit("Снова в штате") { store.rehire(id) }
+                } label: { Label("Вернуть на работу", systemImage: "person.badge.plus") }
+            } else {
+                Button { confirmDismiss = true } label: { Label("Уволить", systemImage: "person.fill.xmark") }
+                    .tint(.orange)
+            }
+            Button("Удалить сотрудника", role: .destructive) { confirmDelete = true }
+        } footer: {
+            if Store.isDismissed(emp) {
+                Text("Уволенный хранится в архиве учёта вместе с историей. Пока техника не сдана, она числится за ним.")
+            }
+        }
+    }
+
+    /// Сначала сохраняем правки карточки, потом действие над сохранённой — и показываем, что вышло.
+    private func commit(_ toast: String, _ op: () -> Void) {
+        hideKeyboard()
+        emp = store.saveEmployee(emp)
+        op()
+        emp = store.employee(id) ?? emp
+        onSaved(toast)
+    }
+
+    private var telURL: URL? {
+        let digits = (emp["phone"]?.string ?? "").filter { $0.isNumber || $0 == "+" }
+        return digits.count >= 3 ? URL(string: "tel:" + digits) : nil
+    }
+
+    private var mailURL: URL? {
+        let m = (emp["email"]?.string ?? "").trimmingCharacters(in: .whitespaces)
+        return m.contains("@") ? URL(string: "mailto:" + m) : nil
     }
 
     /// История сотрудника: какие картриджи он брал и какие заявки на него записаны. Считается по
@@ -291,8 +466,7 @@ struct EmployeeView: View {
                     DisclosureGroup {
                         ForEach(entries.prefix(10)) { e in
                             VStack(alignment: .leading, spacing: 2) {
-                                Text([e.description, e.actions, e.result].compactMap { $0 }.first { !$0.isEmpty } ?? "—")
-                                    .font(.callout)
+                                Text(Store.entryTitle(e)).font(.callout)
                                 Text(Readable.date(e.date)).font(.caption).foregroundStyle(.secondary)
                             }
                         }
@@ -313,6 +487,20 @@ struct EmployeeView: View {
             ForEach(list.indices, id: \.self) { i in
                 DisclosureGroup {
                     ForEach(spec.fields, id: \.self) { f in fieldView(f, devBinding(group, i, f.key)) }
+                    if group == "printers" {
+                        LabeledContent("Картридж") {
+                            TextField("Например, CF226", text: devText(group, i, "cartridge"))
+                                .multilineTextAlignment(.trailing)
+                                .textInputAutocapitalization(.characters).autocorrectionDisabled()
+                        }
+                    }
+                    OptionalDateRow(label: "Куплен", value: devText(group, i, "bought"))
+                    OptionalDateRow(label: "Гарантия до", value: devText(group, i, "warranty"))
+                    if !isNew, let did = list[i]["id"]?.string, !did.isEmpty {
+                        Button { openDevice(did) } label: {
+                            Label("История и передача", systemImage: "clock.arrow.circlepath")
+                        }
+                    }
                     Button("Убрать", role: .destructive) {
                         var arr = list
                         arr.remove(at: i)
@@ -321,12 +509,14 @@ struct EmployeeView: View {
                 } label: {
                     HStack {
                         Circle().fill(condColor(list[i]["condition"]?.string ?? "")).frame(width: 8, height: 8)
-                        Text("\(spec.singular) \(i + 1)" + summary(list[i], spec))
+                        Text("\(spec.singular) \(i + 1)" + Store.deviceSummary(list[i].object, spec))
+                        Spacer(minLength: 4)
+                        WarrantyBadge(days: Store.warrantyDays(list[i].object, today: store.today))
                     }
                 }
             }
             Button {
-                var row: Dict = [:]
+                var row: Dict = ["id": .string(Store.newId())]
                 for f in spec.fields {
                     row[f.key] = f.kind == "check" ? .bool(false)
                         : .string(f.kind == "combo" ? meta.conditions.first ?? "" : "")
@@ -340,6 +530,13 @@ struct EmployeeView: View {
         }
     }
 
+    /// История и передача работают с сохранённым: правки карточки сначала уходят в учёт.
+    private func openDevice(_ deviceId: String) {
+        hideKeyboard()
+        emp = store.saveEmployee(emp)
+        opened = store.device(deviceId)
+    }
+
     private func condColor(_ c: String) -> Color {
         switch c {
         case "неисправно": return .red
@@ -347,12 +544,6 @@ struct EmployeeView: View {
         case "отсутствует": return .gray
         default: return .green
         }
-    }
-
-    private func summary(_ dev: JSON, _ spec: DeviceSpec) -> String {
-        let first = spec.fields.lazy.filter { $0.kind != "check" && $0.kind != "combo" }
-            .map { dev[$0.key]?.string ?? "" }.first { !$0.isEmpty }
-        return first.map { " · " + $0 } ?? ""
     }
 
     @ViewBuilder
@@ -389,8 +580,64 @@ struct EmployeeView: View {
         })
     }
 
+    private func devText(_ group: String, _ i: Int, _ key: String) -> Binding<String> {
+        let b = devBinding(group, i, key)
+        return Binding(get: { b.wrappedValue.string }, set: { b.wrappedValue = .string($0) })
+    }
+
     private func partBinding(_ part: String) -> Binding<String> {
         Binding(get: { emp[part]?["condition"]?.string ?? meta.conditions.first ?? "" },
                 set: { emp[part] = .object(["condition": .string($0)]) })
+    }
+}
+
+/// Чек-лист нового сотрудника в настройках: пункты правятся, переставляются и удаляются.
+struct ChecklistView: View {
+    @EnvironmentObject private var store: Store
+    @State private var steps: [Step] = []
+    @State private var fresh = ""
+
+    struct Step: Identifiable {
+        let id = UUID()
+        var text: String
+    }
+
+    var body: some View {
+        List {
+            Section {
+                ForEach($steps) { $s in
+                    TextField("Пункт", text: $s.text)
+                }
+                .onDelete { steps.remove(atOffsets: $0) }
+                .onMove { steps.move(fromOffsets: $0, toOffset: $1) }
+                HStack {
+                    TextField("Новый пункт", text: $fresh).onSubmit(add)
+                    Button(action: add) { Image(systemName: "plus.circle.fill").font(.title3) }
+                        .buttonStyle(.borderless)
+                        .disabled(fresh.trimmed.isEmpty)
+                        .accessibilityLabel("Добавить пункт")
+                }
+            } footer: {
+                Text("Этот список появляется в карточке каждого нового сотрудника. Сделанное уходит в отчёт одной записью.")
+            }
+            Section {
+                Button("Вернуть стандартный список") {
+                    withAnimation(.snappy) { steps = Store.defaultChecklist.map { Step(text: $0) } }
+                }
+            }
+        }
+        .navigationTitle("Чек-лист")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .topBarTrailing) { EditButton() } }
+        .keyboardDone()
+        .onAppear { if steps.isEmpty { steps = store.checklist.map { Step(text: $0) } } }
+        .onDisappear { store.setChecklist(steps.map(\.text)) }
+    }
+
+    private func add() {
+        let t = fresh.trimmed
+        guard !t.isEmpty else { return }
+        withAnimation(.snappy) { steps.append(Step(text: t)) }
+        fresh = ""
     }
 }

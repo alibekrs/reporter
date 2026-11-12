@@ -19,7 +19,9 @@ enum JSON: Codable, Hashable {
         var c = encoder.singleValueContainer()
         switch self {
         case .string(let s): try c.encode(s)
-        case .number(let n): try c.encode(n)
+        // целое — без «.0»: выдача из корзины читается обратно в Int
+        case .number(let n):
+            if n == n.rounded(), abs(n) < 1e15 { try c.encode(Int64(n)) } else { try c.encode(n) }
         case .bool(let b): try c.encode(b)
         case .array(let a): try c.encode(a)
         case .object(let o): try c.encode(o)
@@ -101,7 +103,41 @@ struct Entry: Codable, Identifiable, Hashable {
     var description: String? = ""
     var actions: String? = ""
     var result: String? = ""
+    /// id устройства, с которым была заявка: запись попадает в его историю
+    var device: String? = nil
     var id: String { uid }
+}
+
+/// Событие в истории устройства: появилось у сотрудника, передано, владелец уволен, вернули из корзины.
+struct DeviceEvent: Codable, Hashable, Identifiable {
+    var id: String
+    var device: String
+    var date: String
+    /// new — выдано, move — передано, fired — владелец уволен, back — вернули из корзины
+    var kind: String
+    var text: String
+}
+
+/// Удалённое: лежит в корзине 30 дней, пока его можно вернуть.
+struct TrashItem: Codable, Hashable, Identifiable {
+    var id: String
+    /// entry, employee, cart, template, unit, device
+    var kind: String
+    var deleted: Date
+    var title: String
+    var subtitle: String
+    var payload: JSON
+    /// выдача — её заявка в отчёте; устройство — у кого и в какой группе оно было
+    var extra: JSON?
+}
+
+/// Любое значение — в JSON и обратно (корзина хранит удалённое как есть).
+func asJSON<T: Encodable>(_ value: T) -> JSON {
+    (try? JSONEncoder().encode(value)).flatMap { try? JSONDecoder().decode(JSON.self, from: $0) } ?? .null
+}
+
+func fromJSON<T: Decodable>(_ json: JSON, as type: T.Type) -> T? {
+    (try? JSONEncoder().encode(json)).flatMap { try? JSONDecoder().decode(T.self, from: $0) }
 }
 
 /// Шаблон заявки: заполняет «Что случилось», «Что сделано» и «Итог».

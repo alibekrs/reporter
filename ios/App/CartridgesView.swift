@@ -216,6 +216,7 @@ struct CartEditor: View {
                 }
                 Section("Картридж") {
                     TextField("Модель, например 285", text: $model).autocorrectionDisabled()
+                    printerHint
                     if !modelHints.isEmpty {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack {
@@ -290,10 +291,33 @@ struct CartEditor: View {
         }
     }
 
-    /// Выбрали человека из подсказки — подставляем картридж, который он брал в прошлый раз.
+    /// Картридж из карточки его принтера: нажатие подставляет модель. Только в новой выдаче.
+    @ViewBuilder private var printerHint: some View {
+        let own = item.id == 0 ? store.printerCartridges(typed: employee) : []
+        if !own.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack {
+                    ForEach(own, id: \.self) { m in
+                        Button { withAnimation(.snappy) { model = m } } label: {
+                            Label("Его принтер: \(m)", systemImage: "printer.fill")
+                        }
+                        .buttonStyle(.borderedProminent).tint(.orange)
+                    }
+                }
+            }
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
+    }
+
+    /// Выбрали человека из подсказки — подставляем картридж его принтера, а нет — тот, что он брал в прошлый раз.
     private func pick(_ name: String) {
         employee = name
-        if item.id == 0, model.isEmpty, let last = store.cartHistory(typed: name).first { model = last.model }
+        guard item.id == 0, model.isEmpty else { return }
+        if let own = store.printerCartridges(typed: name).first {
+            model = own
+        } else if let last = store.cartHistory(typed: name).first {
+            model = last.model
+        }
     }
 
     private var modelHints: [String] {

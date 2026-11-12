@@ -1,9 +1,10 @@
 import SwiftUI
 
-/// Подразделения: нажать — переименовать или перенести, «+» — новое, долгое нажатие — удалить пустое.
+/// Подразделения: нажать — карточка отдела, «+» — новое, долгое нажатие — удалить пустое.
 struct UnitsView: View {
     @EnvironmentObject private var store: Store
     @State private var editing: Unit?
+    @State private var opened: Unit?
     @State private var error: String?
     @State private var toast: String?
 
@@ -11,8 +12,8 @@ struct UnitsView: View {
         List {
             Section {
                 ForEach(store.units) { u in
-                    let staff = store.state.employees.filter { $0["unit_id"]?.string == u.id }.count
-                    Button { editing = u } label: {
+                    let staff = store.state.employees.filter { $0["unit_id"]?.string == u.id && !Store.isDismissed($0) }.count
+                    Button { opened = u } label: {
                         HStack(spacing: 8) {
                             if u.depth > 0 {
                                 Image(systemName: "arrow.turn.down.right").font(.caption).foregroundStyle(.secondary)
@@ -29,8 +30,8 @@ struct UnitsView: View {
                     }
                 }
             } footer: {
-                Text("Справа — сколько сотрудников в подразделении. Нажмите, чтобы переименовать или перенести. "
-                     + "Удалить можно только пустое подразделение — долгим нажатием.")
+                Text("Справа — сколько сотрудников в подразделении. Нажмите — карточка отдела: люди, техника, "
+                     + "заявки и картриджи за месяц. Удалить можно только пустое подразделение — долгим нажатием.")
             }
         }
         .animation(.snappy, value: store.units)
@@ -46,6 +47,7 @@ struct UnitsView: View {
             }
         }
         .navigationDestination(item: $editing) { UnitEditor(unit: $0) }
+        .navigationDestination(item: $opened) { UnitCard(unitId: $0.id) }
         .errorAlert($error)
         .toast($toast) { if store.undoDelete() { toast = "Возвращено" } }
     }
@@ -55,6 +57,69 @@ struct UnitsView: View {
             try store.deleteUnit(u.id)
             toast = Toast.deleted
         } catch { self.error = error.localizedDescription }
+    }
+}
+
+/// Карточка отдела (с вложенными): сколько людей и техники, заявки и картриджи за месяц, кто работает.
+struct UnitCard: View {
+    let unitId: String
+
+    @EnvironmentObject private var store: Store
+    @State private var editing = false
+
+    var body: some View {
+        let unit = store.units.first { $0.id == unitId }
+        let s = store.unitStats(unitId)
+        let month = Dates.months[(Int(store.today.dropFirst(5).prefix(2)) ?? 1) - 1].lowercased()
+        List {
+            Section {
+                Text(unit?.path ?? "Подразделение удалено").font(.subheadline).foregroundStyle(.secondary)
+                    .listRowBackground(Color.clear)
+            }
+            Section {
+                HStack(spacing: 10) {
+                    StatCard(title: plural(s.people.count, "сотрудник", "сотрудника", "сотрудников"),
+                             value: s.people.count, icon: "person.2.fill", color: Brand.blue)
+                    StatCard(title: "техники", value: s.devices.reduce(0) { $0 + $1.count },
+                             icon: "desktopcomputer", color: .teal)
+                    StatCard(title: "с проблемой", value: s.withTrouble, icon: "exclamationmark.triangle.fill",
+                             color: .orange)
+                }
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+            }
+            Section("За \(month)") {
+                LabeledContent("Заявок в отчёте") { Text("\(s.entries)").monospacedDigit() }
+                LabeledContent("Картриджей выдано") { Text("\(s.carts)").monospacedDigit() }
+            }
+            if !s.devices.isEmpty {
+                Section {
+                    ForEach(s.devices.indices, id: \.self) { i in
+                        LabeledContent(s.devices[i].title) { Text("\(s.devices[i].count)").monospacedDigit() }
+                    }
+                    if s.old > 0 {
+                        Label("Старше 5 лет: \(s.old)", systemImage: "clock.badge.exclamationmark")
+                            .foregroundStyle(.orange)
+                    }
+                } header: { Text("Техника") }
+            }
+            Section("Сотрудники") {
+                if s.people.isEmpty {
+                    Text("Пока никого").foregroundStyle(.secondary)
+                }
+                ForEach(s.people, id: \.["id"]) { e in EmployeeRow(e: e) }
+            }
+        }
+        .navigationTitle(unit?.name ?? "Подразделение")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Изменить") { editing = true }.disabled(unit == nil)
+            }
+        }
+        .navigationDestination(isPresented: $editing) {
+            if let unit { UnitEditor(unit: unit) }
+        }
     }
 }
 

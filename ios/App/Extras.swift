@@ -1,3 +1,4 @@
+import LocalAuthentication
 import QuickLook
 import SwiftUI
 import UserNotifications
@@ -56,12 +57,27 @@ private struct FilePreview: UIViewControllerRepresentable {
     }
 }
 
-// ── напоминание в пятницу ───────────────────────────────────────────────────
-/// «Пора отправить отчёт» по пятницам в 16:00. На каждую ближайшую пятницу — своё уведомление: так его
-/// можно не ставить на неделю, за которую отчёт уже ушёл.
+// ── напоминания ─────────────────────────────────────────────────────────────
+/// «Пора отправить отчёт» по пятницам в 16:00, дни рождения в 9:00 и конец гарантии за месяц — каждое
+/// включается в настройках. На каждую ближайшую пятницу — своё уведомление: так его можно не ставить на неделю,
+/// за которую отчёт уже ушёл.
 enum Reminder {
     static let onKey = "reminder.on"
+    static let birthdaysKey = "reminder.birthdays"
+    static let warrantyKey = "reminder.warranty"
     private static let sentKey = "reminder.sentWeek"
+
+    struct Planned {
+        enum Kind { case birthday, warranty }
+        let id: String
+        let fire: Date
+        let kind: Kind
+        let title: String
+        let body: String
+    }
+
+    /// Дни рождения и концы гарантии из данных — Store обновляет их при каждом изменении.
+    static var planned: [Planned] = []
 
     /// Спросить разрешение на уведомления. false — пользователь запретил.
     static func allow() async -> Bool {
@@ -75,27 +91,80 @@ enum Reminder {
         refresh()
     }
 
-    /// Пересобрать напоминания на шесть недель вперёд. Зовётся при открытии приложения, при переключении
-    /// напоминания и после отправки отчёта.
+    /// Пересобрать напоминания: пятницы на шесть недель вперёд, дни рождения и гарантии — ближайшие (система
+    /// держит не больше 64 уведомлений). Зовётся при открытии приложения, при правке данных, при переключении
+    /// напоминаний и после отправки отчёта.
     static func refresh() {
         let center = UNUserNotificationCenter.current(), d = UserDefaults.standard
         center.removeAllPendingNotificationRequests()
-        guard d.bool(forKey: onKey) else { return }
-        let cal = Calendar(identifier: .gregorian), sent = d.string(forKey: sentKey) ?? ""
-        var monday = Dates.monday(Date())
-        for _ in 0..<6 {
-            let week = Dates.text(monday)
-            let fire = cal.date(byAdding: DateComponents(day: 4, hour: 16), to: monday) ?? monday
-            monday = cal.date(byAdding: .day, value: 7, to: monday) ?? monday
-            guard week > sent, fire > Date() else { continue }
+        let cal = Calendar(identifier: .gregorian), now = Date()
+        func request(_ id: String, _ fire: Date, _ title: String, _ body: String) -> UNNotificationRequest {
             let content = UNMutableNotificationContent()
-            content.title = "Пора отправить отчёт"
-            content.body = "Пятница: отчёт за неделю ещё не ушёл начальнику."
+            content.title = title
+            content.body = body
             content.sound = .default
             var when = cal.dateComponents([.year, .month, .day, .hour, .minute], from: fire)
             when.calendar = cal
-            center.add(UNNotificationRequest(identifier: "friday-" + week, content: content,
-                                             trigger: UNCalendarNotificationTrigger(dateMatching: when, repeats: false)))
+            return UNNotificationRequest(identifier: id, content: content,
+                                         trigger: UNCalendarNotificationTrigger(dateMatching: when, repeats: false))
+        }
+        var out: [UNNotificationRequest] = []
+        if d.bool(forKey: onKey) {
+            let sent = d.string(forKey: sentKey) ?? ""
+            var monday = Dates.monday(now)
+            for _ in 0..<6 {
+                let week = Dates.text(monday)
+                let fire = cal.date(byAdding: DateComponents(day: 4, hour: 16), to: monday) ?? monday
+                monday = cal.date(byAdding: .day, value: 7, to: monday) ?? monday
+                guard week > sent, fire > now else { continue }
+                out.append(request("friday-" + week, fire, "Пора отправить отчёт",
+                                   "Пятница: отчёт за неделю ещё не ушёл начальнику."))
+            }
+        }
+        let wanted = planned
+            .filter { $0.fire > now && d.bool(forKey: $0.kind == .birthday ? birthdaysKey : warrantyKey) }
+            .sorted { $0.fire < $1.fire }
+            .prefix(max(0, 60 - out.count))
+        out += wanted.map { request($0.id, $0.fire, $0.title, $0.body) }
+        for r in out { center.add(r) }
+    }
+}
+
+// ── вход по Face ID ─────────────────────────────────────────────────────────
+/// Приложение закрывается, когда уходит в фон, и открывается по Face ID (или коду-паролю iPhone).
+enum AppLock {
+    static let key = "lock.on"
+
+    /// nil — есть чем входить; иначе — почему нельзя включить.
+    static func unavailable() -> String? {
+        var e: NSError?
+        return LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: &e) ? nil
+            : "На iPhone не настроены ни Face ID, ни код-пароль. Включите их в настройках iPhone: «Face ID и код-пароль»."
+    }
+
+    static func unlock() async -> Bool {
+        let c = LAContext()
+        c.localizedFallbackTitle = "Ввести код-пароль"
+        return (try? await c.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Вход в REPORTER")) ?? false
+    }
+}
+
+/// Экран поверх приложения, пока оно закрыто: и в переключателе приложений данные не видны.
+struct LockView: View {
+    let unlock: () -> Void
+
+    var body: some View {
+        ZStack {
+            AppBackground().ignoresSafeArea()
+            VStack(spacing: 18) {
+                Image("Logo").resizable().scaledToFit().frame(height: 96)
+                Text("REPORTER").font(.title2.bold())
+                Button(action: unlock) {
+                    Label("Войти по Face ID", systemImage: "faceid").font(.headline).padding(.vertical, 4)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Brand.blue)
+            }
         }
     }
 }

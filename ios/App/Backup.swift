@@ -1,4 +1,7 @@
+import CommonCrypto
+import CryptoKit
 import Foundation
+import Security
 
 /// Файл бэкапа (JSON). Его же читает «Восстановить из бэкапа». Поля — как в базе ITtool,
 /// чтобы данные можно было перенести куда угодно.
@@ -12,15 +15,21 @@ struct BackupFile: Codable {
     var entries: [Entry]
     var cartridges: [CartRaw]
     var templates: [EntryTemplate]? = nil
+    /// в бэкапах до 5.1 этих полей нет
+    var storeroom: Dict? = nil
+    var device_log: [DeviceEvent]? = nil
+    var checklist: [String]? = nil
 
     enum CodingKeys: String, CodingKey {
-        case note = "описание", app, exported_at, meta, units, employees, entries, cartridges, templates
+        case note = "описание", app, exported_at, meta, units, employees, entries, cartridges, templates, storeroom,
+             device_log, checklist
     }
 
     static let readme = "Бэкап приложения REPORTER (раньше ITtool). units — подразделения, employees — сотрудники и их техника "
-        + "(pcs — компьютеры, monitors — мониторы, phones — телефоны, printers — принтеры), entries — записи "
+        + "(pcs — компьютеры, monitors — мониторы, phones — телефоны, printers — принтеры; dismissed — дата увольнения), "
+        + "storeroom — техника на складе, device_log — история техники, entries — записи "
         + "еженедельного отчёта, cartridges — выдачи картриджей, templates — шаблоны заявок (если их меняли), "
-        + "meta — справочник полей техники. "
+        + "checklist — чек-лист нового сотрудника, meta — справочник полей техники. "
         + "Excel-файл с тем же названием — те же данные в виде таблиц для чтения."
 
     var stats: String {
@@ -90,36 +99,57 @@ enum Readable {
                           widths: [12, 28, 40, 40, 28], rows: rows)
     }
 
+    /// Поля техники вне справочника: картридж принтера и даты покупки и гарантии.
+    private static let deviceExtras = [("cartridge", "Картридж"), ("bought", "Куплен"), ("warranty", "Гарантия до")]
+
+    /// Техника одного владельца (сотрудника или склада) — по строке на устройство.
+    static func devices(_ holder: Dict, meta: Meta?) -> [String] {
+        let order = meta?.device_order ?? ["pcs", "monitors", "phones", "printers"]
+        return order.flatMap { g -> [String] in
+            let spec = meta?.devices[g]
+            return (holder[g]?.array ?? []).map { item -> String in
+                let o = item.object
+                var parts: [String]
+                if let spec {
+                    parts = spec.fields.compactMap { value(o[$0.key], label: $0.label) }
+                } else {
+                    let skip = Set(["id"] + deviceExtras.map { $0.0 })
+                    parts = o.keys.sorted().filter { !skip.contains($0) }.compactMap { value(o[$0], label: $0) }
+                }
+                for (k, label) in deviceExtras {
+                    let v = o[k]?.string ?? ""
+                    if !v.isEmpty { parts.append("\(label): \(k == "cartridge" ? v : date(v))") }
+                }
+                return (spec?.singular ?? g) + ": " + parts.joined(separator: ", ")
+            }
+        }
+    }
+
     static func staff(_ b: BackupFile) -> Xlsx.Sheet {
         let paths = unitPaths(b.units)
-        let order = b.meta?.device_order ?? ["pcs", "monitors", "phones", "printers"]
-        let rows = b.employees.map { e -> [String] in
-            let devices = order.flatMap { g -> [String] in
-                let spec = b.meta?.devices[g]
-                return (e[g]?.array ?? []).map { item -> String in
-                    let o = item.object
-                    let parts: [String]
-                    if let spec {
-                        parts = spec.fields.compactMap { value(o[$0.key], label: $0.label) }
-                    } else {
-                        parts = o.keys.sorted().compactMap { value(o[$0], label: $0) }
-                    }
-                    return (spec?.singular ?? g) + ": " + parts.joined(separator: ", ")
-                }
-            }
+        var rows = b.employees.map { e -> [String] in
             func text(_ k: String) -> String { e[k]?.string ?? "" }
             func condition(_ k: String) -> String { e[k]?["condition"]?.string ?? "" }
             let unit: String = paths[text("unit_id")] ?? ""
             let head: String = e["is_head"]?.bool == true ? "да" : ""
-            let tech: String = devices.joined(separator: "\n")
+            let tech: String = devices(e, meta: b.meta).joined(separator: "\n")
+            let birthday = text("birthday"), fired = text("dismissed")
             return [unit, personName(e), text("position"), head, text("building"), text("floor"), text("office"),
-                    text("account"), tech, condition("mouse"), condition("keyboard"), text("notes")]
+                    text("account"), text("phone"), text("email"), birthday.isEmpty ? "" : date(birthday),
+                    tech, condition("mouse"), condition("keyboard"), text("notes"), fired.isEmpty ? "" : date(fired)]
         }
         .sorted { ($0[0], $0[1]) < ($1[0], $1[1]) }
+        // техника без хозяина — отдельной строкой в конце
+        let stock = devices(b.storeroom ?? [:], meta: b.meta)
+        if !stock.isEmpty {
+            rows.append(["", "Склад (без хозяина)", "", "", "", "", "", "", "", "", "", stock.joined(separator: "\n"),
+                         "", "", "", ""])
+        }
         return Xlsx.Sheet(name: "Сотрудники и техника",
                           header: ["Подразделение", "ФИО", "Должность", "Руководитель", "Здание", "Этаж", "Кабинет",
-                                   "Учётная запись", "Техника", "Мышь", "Клавиатура", "Заметки"],
-                          widths: [30, 32, 26, 12, 12, 8, 10, 18, 60, 16, 16, 30], rows: rows)
+                                   "Учётная запись", "Телефон", "Почта", "День рождения", "Техника", "Мышь",
+                                   "Клавиатура", "Заметки", "Уволен"],
+                          widths: [30, 32, 26, 12, 12, 8, 10, 18, 18, 26, 14, 60, 16, 16, 30, 12], rows: rows)
     }
 
     static func carts(_ b: BackupFile) -> Xlsx.Sheet {
@@ -234,9 +264,69 @@ enum Xlsx {
     }
 }
 
-/// Отправка файла в телеграм-группу через бота (Bot API sendDocument).
+/// Шифрование бэкапа паролем: AES-GCM, ключ из пароля через PBKDF2. Расшифровать может только приложение
+/// (или тот, кто знает пароль и формат): в начале файла — метка, соль и число раундов, дальше шифротекст.
+enum BackupCrypto {
+    static let passwordKey = "backup.password"
+    private static let magic = Data("REPORTER-ENC1\n".utf8)
+    private static let rounds: UInt32 = 200_000
+
+    static func isEncrypted(_ data: Data) -> Bool { data.starts(with: magic) }
+
+    static func encrypt(_ plain: Data, password: String) throws -> Data {
+        var salt = [UInt8](repeating: 0, count: 16)
+        guard SecRandomCopyBytes(kSecRandomDefault, salt.count, &salt) == errSecSuccess else {
+            throw APIError(message: "Не получилось зашифровать бэкап.")
+        }
+        let key = try derive(password, Data(salt), rounds)
+        guard let sealed = try AES.GCM.seal(plain, using: key).combined else {
+            throw APIError(message: "Не получилось зашифровать бэкап.")
+        }
+        var out = magic
+        out.append(contentsOf: salt)
+        withUnsafeBytes(of: rounds.bigEndian) { out.append(contentsOf: $0) }
+        out.append(sealed)
+        return out
+    }
+
+    static func decrypt(_ input: Data, password: String) throws -> Data {
+        let data = Data(input)                    // индексы с нуля, даже если пришёл кусок другого Data
+        let head = magic.count, body = head + 16 + 4
+        guard isEncrypted(data), data.count > body + 28 else {
+            throw APIError(message: "Файл бэкапа повреждён.")
+        }
+        let salt = data.subdata(in: head..<(head + 16))
+        let r = data.subdata(in: (head + 16)..<body).reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
+        do {
+            let box = try AES.GCM.SealedBox(combined: data.subdata(in: body..<data.count))
+            return try AES.GCM.open(box, using: derive(password, salt, r))
+        } catch {
+            throw APIError(message: "Пароль бэкапа не подходит, или файл повреждён.")
+        }
+    }
+
+    private static func derive(_ password: String, _ salt: Data, _ rounds: UInt32) throws -> SymmetricKey {
+        guard !password.isEmpty, rounds > 0 else { throw APIError(message: "Пароль бэкапа не задан.") }
+        var key = [UInt8](repeating: 0, count: 32)
+        let pw = Array(password.utf8).map { CChar(bitPattern: $0) }
+        let status = key.withUnsafeMutableBufferPointer { k in
+            salt.withUnsafeBytes { s in
+                CCKeyDerivationPBKDF(CCPBKDFAlgorithm(kCCPBKDF2), pw, pw.count,
+                                     s.bindMemory(to: UInt8.self).baseAddress, salt.count,
+                                     CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256), rounds, k.baseAddress, k.count)
+            }
+        }
+        guard status == Int32(kCCSuccess) else { throw APIError(message: "Не получилось подготовить ключ бэкапа.") }
+        return SymmetricKey(data: key)
+    }
+}
+
+/// Отправка файла в телеграм-группу через бота (Bot API sendDocument) и чтение его обратно (getFile).
 enum Telegram {
-    static func send(token: String, chat: String, file: Data, name: String, mime: String, caption: String?) async throws {
+    /// Возвращает file_id отправленного файла — по нему бэкап потом скачивается для проверки.
+    @discardableResult
+    static func send(token: String, chat: String, file: Data, name: String, mime: String,
+                     caption: String?) async throws -> String {
         let t = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty, let url = URL(string: "https://api.telegram.org/bot\(t)/sendDocument") else {
             throw APIError(message: "Неверный токен бота.")
@@ -257,9 +347,31 @@ enum Telegram {
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         req.httpBody = body
         let (data, resp) = try await URLSession.shared.data(for: req)
+        let j = try check(data, resp)
+        return j["result"]?["document"]?["file_id"]?.string ?? ""
+    }
+
+    /// Скачать файл, который бот отправлял раньше (до 20 МБ — бэкап намного меньше).
+    static func download(token: String, fileId: String) async throws -> Data {
+        let t = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        var c = URLComponents(string: "https://api.telegram.org/bot\(t)/getFile")
+        c?.queryItems = [URLQueryItem(name: "file_id", value: fileId)]
+        guard !t.isEmpty, let url = c?.url else { throw APIError(message: "Неверный токен бота.") }
+        let (data, resp) = try await URLSession.shared.data(for: URLRequest(url: url, timeoutInterval: 60))
+        let path = try check(data, resp)["result"]?["file_path"]?.string ?? ""
+        guard !path.isEmpty, let file = URL(string: "https://api.telegram.org/file/bot\(t)/\(path)") else {
+            throw APIError(message: "Телеграм не отдал файл бэкапа.")
+        }
+        let (body, r2) = try await URLSession.shared.data(for: URLRequest(url: file, timeoutInterval: 60))
+        guard (r2 as? HTTPURLResponse)?.statusCode == 200 else { throw APIError(message: "Телеграм не отдал файл бэкапа.") }
+        return body
+    }
+
+    /// Ответ Bot API: ошибки — понятным текстом.
+    private static func check(_ data: Data, _ resp: URLResponse) throws -> JSON {
+        let j = (try? JSONDecoder().decode(JSON.self, from: data)) ?? .null
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
-            let j = try? JSONDecoder().decode(Dict.self, from: data)
-            let d = j?["description"]?.string ?? "Телеграм ответил ошибкой."
+            let d = j["description"]?.string ?? "Телеграм ответил ошибкой."
             if d.contains("chat not found") {
                 throw APIError(message: "Группа не найдена. ID группы начинается с -100…, а бот должен быть в этой группе.")
             }
@@ -268,5 +380,6 @@ enum Telegram {
             }
             throw APIError(message: d)
         }
+        return j
     }
 }

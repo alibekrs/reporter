@@ -298,6 +298,7 @@ struct EntryEditor: View {
     @State private var description: String
     @State private var actions: String
     @State private var result: String
+    @State private var device: String
     @State private var error: String?
     @State private var templatesOpen = false
 
@@ -311,6 +312,30 @@ struct EntryEditor: View {
         _description = State(initialValue: entry.description ?? "")
         _actions = State(initialValue: entry.actions ?? "")
         _result = State(initialValue: entry.result ?? "")
+        _device = State(initialValue: entry.device ?? "")
+    }
+
+    /// Техника того, на кого заявка. Устройство уже выбрано, а человека в поле сменили — оставляем его
+    /// в списке, чтобы выбор не потерялся молча.
+    private var deviceOptions: [DeviceRef] {
+        var options = store.devices(forFio: employee)
+        if !device.isEmpty, !options.contains(where: { $0.id == device }), let d = store.device(device) {
+            options.append(d)
+        }
+        return options
+    }
+
+    /// Выбранное устройство получит эту запись в свою историю.
+    @ViewBuilder private var devicePicker: some View {
+        let options = deviceOptions
+        if !options.isEmpty {
+            Picker(selection: $device) {
+                Text("не выбрано").tag("")
+                ForEach(options) { d in Text(store.deviceTitle(d)).tag(d.id) }
+            } label: {
+                Label("Устройство", systemImage: "desktopcomputer")
+            }
+        }
     }
 
     var body: some View {
@@ -332,6 +357,7 @@ struct EntryEditor: View {
                         .environment(\.locale, Locale(identifier: "ru_RU"))
                     TextField("Сотрудник / объект", text: $employee)
                     Suggestions(text: employee, options: store.employeeSuggestions) { employee = $0 }
+                    devicePicker
                 }
                 Section("Что случилось") {
                     TextField("Описание", text: $description, axis: .vertical).lineLimit(2...6)
@@ -359,7 +385,7 @@ struct EntryEditor: View {
     func save() {
         do {
             try store.saveEntry(uid: entry.uid.isEmpty ? nil : entry.uid, date: date, employee: employee,
-                                description: description, actions: actions, result: result)
+                                description: description, actions: actions, result: result, device: device)
             onSaved(entry.uid.isEmpty ? "Запись добавлена" : "Сохранено", date)
             dismiss()
         } catch { self.error = error.localizedDescription }

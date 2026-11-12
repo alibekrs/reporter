@@ -69,7 +69,356 @@ final class Tour {
         summary()
         units()
         reminder()
+        whatsNew51()
         iconAction()
+    }
+
+    /// Нововведения 5.1: жизнь техники, сотрудники, корзина, защита, бэкап.
+    private func whatsNew51() {
+        devices()
+        printerCartridge()
+        fleet()
+        contacts()
+        onboarding()
+        dismissal()
+        trash()
+        security()
+        backupOptions()
+    }
+
+    /// Принтер с картриджем, датой покупки и гарантией → карточка устройства → передача другому сотруднику.
+    private func devices() {
+        tidy()
+        open("Учёт")
+        guard openEmployee("Тестов 01") else { return }
+        guard let add = reveal(app.buttons.matching(NSPredicate(format: "label == %@", "Добавить: принтер")), tries: 16) else {
+            XCTFail("Карточка: нет кнопки «Добавить: принтер»")
+            backToList("Тестов 01")
+            return
+        }
+        add.tap()
+        pause(0.8)
+        let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Принтер 1"))
+        guard let printer = reveal(row, tries: 3) else {
+            XCTFail("Карточка: новый принтер не появился")
+            backToList("Тестов 01")
+            return
+        }
+        printer.tap()                                         // раскрыть поля принтера
+        pause(0.8)
+        type("Модель", "HP LaserJet")
+        type("Например, CF226", "CF226")
+        hideKeyboard()
+        for label in ["Куплен: указать", "Гарантия до: указать"] {
+            if let b = reveal(app.buttons.matching(NSPredicate(format: "label == %@", label)), tries: 4) {
+                b.tap()
+                pause(0.5)
+            } else {
+                XCTFail("Принтер: нет «\(label)»")
+            }
+        }
+        shot("device-filled")
+        tapBarButton("Тестов 01", "Сохранить")
+        pause(1)
+        let historyButton = app.buttons.matching(NSPredicate(format: "label == %@", "История и передача"))
+        var hist = reveal(historyButton, tries: 4)
+        if hist == nil, let p = reveal(row, fromTop: true, tries: 16) {   // после сохранения принтер свернулся
+            p.tap()
+            pause(0.8)
+            hist = reveal(historyButton, tries: 4)
+        }
+        guard let hist else {
+            XCTFail("Принтер: нет кнопки «История и передача»")
+            backToList("Тестов 01")
+            return
+        }
+        hist.tap()
+        guard app.navigationBars["Устройство"].waitForExistence(timeout: 5) else {
+            XCTFail("Принтер: карточка устройства не открылась")
+            backToList("Тестов 01")
+            return
+        }
+        pause(0.8)
+        shot("device-card")
+        tapFirst(app.buttons.matching(NSPredicate(format: "label == %@", "Передать")), "кнопка «Передать»")
+        guard app.navigationBars["Передать"].waitForExistence(timeout: 4) else {
+            XCTFail("Устройство: «Передать» не открылось")
+            tidy()
+            backToList("Тестов 01")
+            return
+        }
+        tapFirst(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Тестов 02")), "сотрудник «Тестов 02»")
+        let confirm = app.buttons["Передать: Тестов 02"]
+        if confirm.waitForExistence(timeout: 4) {
+            confirm.tap()
+        } else {
+            XCTFail("Передача: нет подтверждения «Передать: Тестов 02»")
+            tidy()
+        }
+        pause(1.5)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Тестов 01 → Тестов 02")).firstMatch
+            .waitForExistence(timeout: 4), "Устройство: в истории нет передачи")
+        shot("device-moved")
+        tapBarButton("Устройство", "Закрыть")
+        pause(1.2)
+        XCTAssertNil(visible(row), "Карточка: переданный принтер остался у прежнего владельца")
+        backToList("Тестов 01")
+    }
+
+    /// Выдача картриджа: у сотрудника есть принтер с картриджем — модель подставляется из его карточки.
+    private func printerCartridge() {
+        tidy()
+        open("Картриджи")
+        guard let add = checkAdd("Картриджи, принтер"), tapAdd(add, opens: "Выдача", "carts-printer") else { return }
+        type("ФИО или часть имени", "Тестов 02")
+        pause(0.8)
+        tapFirst(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Его принтер: CF226")),
+                 "подсказка «Его принтер: CF226»")
+        pause(0.8)
+        XCTAssertTrue(hasField("CF226"), "Выдача: картридж принтера не подставился")
+        hideKeyboard()
+        shot("carts-printer")
+        tapBarButton("Выдача", "Отмена")
+        pause(1)
+    }
+
+    /// Сводка: возраст техники по дате покупки.
+    private func fleet() {
+        tidy()
+        open("Главная")
+        tapFirst(app.buttons.matching(NSPredicate(format: "label == %@", "Сводка за месяц и год")), "кнопка «Сводка»")
+        guard app.navigationBars["Сводка"].waitForExistence(timeout: 4) else {
+            XCTFail("Главная: сводка не открылась")
+            return
+        }
+        let header = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "возраст техники"))
+        _ = reveal(header, tries: 6)
+        XCTAssertTrue(header.firstMatch.exists, "Сводка: нет возраста техники")
+        shot("summary-fleet")
+        tapBarButton("Сводка", "Закрыть")
+        pause(1)
+    }
+
+    /// Телефон, почта и день рождения в карточке; день рождения сегодня — карточка на главной.
+    private func contacts() {
+        tidy()
+        open("Учёт")
+        guard openEmployee("Иванов Иван Петрович") else { return }
+        let p = { (t: String) in NSPredicate(format: "label == %@ OR placeholderValue == %@", t, t) }
+        if reveal(app.textFields.matching(p("Телефон")), tries: 10) != nil {
+            type("Телефон", "+7 701 000 00 00")
+            type("Почта", "ivanov@example.com")
+        } else {
+            XCTFail("Карточка: нет поля «Телефон»")
+        }
+        hideKeyboard()
+        if let b = reveal(app.buttons.matching(NSPredicate(format: "label == %@", "День рождения: указать")), fromTop: true,
+                          tries: 10) {
+            b.tap()
+            pause(0.6)
+        } else {
+            XCTFail("Карточка: нет «День рождения: указать»")
+        }
+        shot("employee-birthday")
+        tapBarButton("Иванов Иван Петрович", "Сохранить")
+        pause(1)
+        if reveal(app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Позвонить")), tries: 6) == nil {
+            XCTFail("Карточка: у телефона нет кнопки «Позвонить»")
+        }
+        shot("employee-contacts")
+        backToList("Иванов Иван Петрович")
+        open("Главная")
+        for _ in 0..<3 { drag(fromY: 0.3, toY: 0.8) }
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "ДЕНЬ РОЖДЕНИЯ СЕГОДНЯ")).firstMatch
+            .waitForExistence(timeout: 4), "Главная: нет карточки дня рождения")
+        shot("home-birthday")
+    }
+
+    /// Чек-лист нового сотрудника: отметить пункты и записать сделанное в отчёт.
+    private func onboarding() {
+        tidy()
+        open("Учёт")
+        guard openEmployee("Тестов 03") else { return }
+        for step in ["Создать учётную запись и почту", "Выдать и настроить компьютер", "Подключить принтер",
+                     "Добавить в группы и сетевые папки"] {
+            tapFirst(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", step)), "пункт «\(step)»")
+            pause(0.4)
+        }
+        shot("onboarding")
+        let done = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Готово — записать в отчёт"))
+        tapFirst(done, "кнопка «Готово — записать в отчёт»")
+        pause(1.2)
+        XCTAssertNil(visible(done), "Карточка: после «Готово» чек-лист не убрался")
+        backToList("Тестов 03")
+        open("Отчёт")
+        let entry = app.buttons.matching(NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "Тестов 03",
+                                                     "Подготовка рабочего места"))
+        XCTAssertNotNil(reveal(entry, fromTop: true, tries: 10), "Отчёт: чек-лист не записался в отчёт")
+        shot("onboarding-entry")
+    }
+
+    /// Уволить: карточка уходит в «Уволенные» внизу учёта.
+    private func dismissal() {
+        tidy()
+        open("Учёт")
+        guard openEmployee("Тестов 04") else { return }
+        guard let fire = reveal(app.buttons.matching(NSPredicate(format: "label == %@", "Уволить")), tries: 18) else {
+            XCTFail("Карточка: нет кнопки «Уволить»")
+            backToList("Тестов 04")
+            return
+        }
+        fire.tap()
+        let yes = app.buttons["Да, уволить"]
+        guard yes.waitForExistence(timeout: 4) else {
+            XCTFail("Уволить: нет подтверждения")
+            backToList("Тестов 04")
+            return
+        }
+        yes.tap()
+        pause(1.2)
+        XCTAssertNotNil(reveal(app.buttons.matching(NSPredicate(format: "label == %@", "Вернуть на работу")), tries: 4),
+                        "Карточка уволенного: нет «Вернуть на работу»")
+        backToList("Тестов 04")
+        let fired = app.buttons.matching(NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "Тестов 04", "уволен"))
+        XCTAssertNotNil(reveal(fired, tries: 12), "Учёт: уволенный не появился в «Уволенных»")
+        shot("assets-dismissed")
+    }
+
+    /// Корзина: удалённая запись (после того как плашка «Вернуть» ушла) возвращается из настроек.
+    private func trash() {
+        tidy()
+        open("Отчёт")
+        let rows = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Замятие бумаги в принтере"))
+        guard let row = reveal(rows, fromTop: true, tries: 8) else {
+            XCTFail("Отчёт: нет записи, на которой проверить корзину")
+            return
+        }
+        row.press(forDuration: 1.2)
+        let delete = app.buttons["Удалить"]
+        guard delete.waitForExistence(timeout: 3) else {
+            XCTFail("Отчёт: долгое нажатие не открыло меню записи")
+            return
+        }
+        delete.tap()
+        pause(7)                                              // плашка «Вернуть» ушла — остаётся только корзина
+        open("Настройки")
+        guard let bin = reveal(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Корзина")), fromTop: true,
+                               tries: 12) else {
+            XCTFail("Настройки: нет строки «Корзина»")
+            return
+        }
+        bin.tap()
+        guard app.navigationBars["Корзина"].waitForExistence(timeout: 4) else {
+            XCTFail("Настройки: корзина не открылась")
+            return
+        }
+        pause(0.8)
+        shot("trash")
+        tapFirst(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Вернуть: Замятие бумаги")),
+                 "«Вернуть» у записи в корзине")
+        pause(1.2)
+        shot("trash-restored")
+        tapBarButton("Корзина", "Закрыть")
+        pause(1)
+        open("Отчёт")
+        XCTAssertNotNil(reveal(rows, fromTop: true, tries: 8), "Отчёт: запись из корзины не вернулась")
+    }
+
+    /// Вход по Face ID: в симуляторе нет ни Face ID, ни кода-пароля — приложение объясняет, почему не включить.
+    private func security() {
+        tidy()
+        open("Настройки")
+        guard let toggle = reveal(app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "Вход по Face ID")),
+                                  fromTop: true, tries: 10) else {
+            XCTFail("Настройки: нет переключателя «Вход по Face ID»")
+            return
+        }
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        let alert = app.alerts.firstMatch
+        if alert.waitForExistence(timeout: 5) {
+            shot("faceid-unavailable")
+            alert.buttons.firstMatch.tap()
+        } else {
+            // в симуляторе оказался код-пароль: системное окно проверки — отменяем, переключатель не должен включиться
+            print("РАЗБОР Face ID: окна «не настроено» нет — отменяем системную проверку")
+            shot("faceid-prompt")
+            let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+            for label in ["Cancel", "Отменить", "Отмена"] where board.buttons[label].exists {
+                board.buttons[label].tap()
+                break
+            }
+        }
+        pause(1)
+        XCTAssertEqual(toggle.value as? String, "0", "Защита: вход по Face ID включился без проверки")
+    }
+
+    /// Бэкап: «каждый день», шифрование с паролем, проверка без отправленного бэкапа — понятный ответ.
+    private func backupOptions() {
+        tidy()
+        open("Настройки")
+        guard let often = reveal(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Как часто")),
+                                 fromTop: true, tries: 16) else {
+            XCTFail("Бэкап: нет «Как часто»")
+            return
+        }
+        often.tap()
+        let daily = app.buttons["Каждый день"]
+        if daily.waitForExistence(timeout: 3) { daily.tap() } else { XCTFail("Бэкап: в «Как часто» нет «Каждый день»") }
+        pause(0.8)
+        guard let encrypt = reveal(app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "Шифровать бэкап")),
+                                   tries: 3) else {
+            XCTFail("Бэкап: нет «Шифровать бэкап»")
+            return
+        }
+        encrypt.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        pause(0.8)
+        type("не короче 8 знаков", "проверка-1234")
+        hideKeyboard()
+        if let check = reveal(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Проверить бэкап сейчас")),
+                              tries: 4) {
+            check.tap()
+        } else {
+            XCTFail("Бэкап: нет кнопки «Проверить бэкап сейчас»")
+        }
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "сначала отправьте бэкап")).firstMatch
+            .waitForExistence(timeout: 4), "Бэкап: проверка без бэкапа не объяснила, что проверять нечего")
+        shot("backup-options")
+    }
+
+    /// Открыть карточку сотрудника из списка учёта.
+    private func openEmployee(_ name: String) -> Bool {
+        let q = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", name))
+        guard let row = reveal(q, fromTop: true, tries: 16) else {
+            XCTFail("Учёт: нет строки «\(name)»")
+            return false
+        }
+        row.tap()
+        guard app.navigationBars[name].waitForExistence(timeout: 5) else {
+            XCTFail("Учёт: карточка «\(name)» не открылась")
+            return false
+        }
+        pause(0.6)
+        return true
+    }
+
+    /// Из карточки — «назад» к списку.
+    private func backToList(_ name: String) {
+        hideKeyboard()
+        let bar = app.navigationBars[name]
+        if bar.exists {
+            bar.buttons.element(boundBy: 0).tap()
+            pause(0.8)
+        }
+    }
+
+    /// Прокрутить, пока элемент не окажется на экране. fromTop — сначала к началу страницы.
+    private func reveal(_ q: XCUIElementQuery, fromTop: Bool = false, tries: Int = 8) -> XCUIElement? {
+        if fromTop { for _ in 0..<6 { drag(fromY: 0.3, toY: 0.85) } }
+        for _ in 0..<tries {
+            if let e = visible(q) { return e }
+            drag(fromY: 0.72, toY: 0.38)
+        }
+        return visible(q)
     }
 
     /// Набранная запись не стирается, если из неё зайти в «Изменить шаблоны» и вернуться.
@@ -283,9 +632,13 @@ final class Tour {
     private func units() {
         tidy()
         open("Настройки")
-        for _ in 0..<6 { drag(fromY: 0.3, toY: 0.8) }        // после прохода настройки стоят в конце
-        drag(fromY: 0.6, toY: 0.45)
-        tapFirst(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Подразделения")), "строка «Подразделения»")
+        // после прохода настройки стоят в конце — сверху вниз до строки
+        guard let row = reveal(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Подразделения")),
+                               fromTop: true, tries: 10) else {
+            XCTFail("Настройки: нет строки «Подразделения»")
+            return
+        }
+        row.tap()
         guard app.navigationBars["Подразделения"].waitForExistence(timeout: 4) else {
             XCTFail("Настройки: «Подразделения» не открылись")
             return
@@ -302,6 +655,16 @@ final class Tour {
         XCTAssertNotNil(visible(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Бухгалтерия"))),
                         "Подразделения: новое не появилось в списке")
         shot("units")
+        // карточка отдела: люди, техника, заявки и картриджи за месяц
+        tapFirst(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Филиал")), "строка «Филиал»")
+        if app.navigationBars["Филиал"].waitForExistence(timeout: 4) {
+            pause(0.6)
+            shot("unit-card")
+            app.navigationBars["Филиал"].buttons.element(boundBy: 0).tap()
+            pause(0.8)
+        } else {
+            XCTFail("Подразделения: карточка отдела не открылась")
+        }
         tapBarButton("Подразделения", "Закрыть")
         pause(1)
     }
@@ -844,12 +1207,12 @@ final class Tour {
             || app.textFields.matching(p).firstMatch.exists
     }
 
-    /// Поле ввода по подписи; многострочные поля — textView.
+    /// Поле ввода по подписи; многострочные поля — textView, пароли — secureTextField.
     private func type(_ title: String, _ text: String) {
         let p = NSPredicate(format: "label == %@ OR placeholderValue == %@", title, title)
         let deadline = Date().addingTimeInterval(4)
         repeat {
-            for q in [app.textFields, app.textViews] {
+            for q in [app.textFields, app.textViews, app.secureTextFields] {
                 let f = q.matching(p).firstMatch
                 if f.exists {
                     f.tap()
