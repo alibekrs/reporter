@@ -26,7 +26,7 @@ struct UnitsView: View {
                     }
                     .tint(.primary)
                     .contextMenu {
-                        Button(role: .destructive) { afterMenu { delete(u) } } label: { Label("Удалить", systemImage: "trash") }
+                        Button(role: .destructive) { delete(u) } label: { Label("Удалить", systemImage: "trash") }
                     }
                 }
             } footer: {

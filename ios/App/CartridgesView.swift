@@ -55,10 +55,8 @@ struct CartridgesView: View {
                     Button { editing = it } label: { CartRow(it: it) }.tint(.primary)
                         .contextMenu {
                             Button(role: .destructive) {
-                                afterMenu {
-                                    store.deleteCarts([it.id])
-                                    toast = Toast.deleted
-                                }
+                                store.deleteCarts([it.id])
+                                toast = Toast.deleted
                             } label: { Label("Удалить", systemImage: "trash") }
                         }
                 }

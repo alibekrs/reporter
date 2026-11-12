@@ -696,16 +696,6 @@ struct Toast: ViewModifier {
     }
 }
 
-/// Действие из контекстного меню — когда меню уже закрылось. Если удалить строку или открыть лист, пока меню
-/// ещё закрывается, iOS не дочищает за меню, и часть касаний потом не доходит (переключатели в настройках молчали).
-@MainActor
-func afterMenu(_ action: @escaping @MainActor () -> Void) {
-    Task { @MainActor in
-        try? await Task.sleep(for: .milliseconds(450))
-        action()
-    }
-}
-
 func hideKeyboard() {
     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
 }

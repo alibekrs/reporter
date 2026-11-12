@@ -13,10 +13,6 @@ final class TourTests: XCTestCase {
 
     /// Светлая тема: все страницы с уже заведёнными данными.
     @MainActor func test2Light() { Tour(self, "light").light() }
-
-    /// Разбор переключателей настроек: каким нажатием они срабатывают (идёт последним; отдельно — Run workflow,
-    /// only = test9Toggles).
-    @MainActor func test9Toggles() { Tour(self, "toggles").toggles() }
 }
 
 @MainActor
@@ -417,32 +413,34 @@ final class Tour {
         }
     }
 
-    /// Нажать переключатель (по самому тумблеру справа). Прокрутка, упёршаяся в край страницы, ещё пружинит,
-    /// и нажатие в это время только останавливает её — тогда тумблер не сдвинулся, и жмём ещё раз. Окно
-    /// (разрешение уведомлений, ошибка) — значит, нажатие дошло.
+    /// Нажать переключатель (по самому тумблеру справа): коротким касанием, а не сдвинулся — нажатием подольше,
+    /// как пальцем (на медленном симуляторе короткое касание этого переключателя теряется примерно через раз; разбор
+    /// с выгрузкой дерева элементов ничего поверх не нашёл). Окно (разрешение уведомлений, ошибка) — нажатие дошло.
     private func flip(_ toggle: XCUIElement, _ name: String) {
         pause(1.2)
         let before = toggle.value as? String
         let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        for attempt in 1...2 {
+        let ways: [(String, (XCUICoordinate) -> Void)] = [("касание", { $0.tap() }),
+                                                         ("нажатие подольше", { $0.press(forDuration: 0.25) })]
+        for (how, act) in ways {
             // поверх — системное окно (Face ID, код-пароль): нажатие уйдёт в никуда, а XCUITest упадёт
             guard toggle.isHittable else {
                 print("РАЗБОР \(name): переключатель закрыт другим окном")
                 shot(name + "-covered")
                 return
             }
-            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
-            pause(0.4)
-            shot(name + "-tap\(attempt)")                  // что стало сразу после нажатия — для разбора
-            pause(0.8)
+            act(toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)))
+            pause(1.2)
             let alert = app.alerts.firstMatch
             if alert.exists {
                 print("РАЗБОР \(name): окно — " + alert.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | "))
                 return
             }
-            let now = toggle.value as? String
-            if board.alerts.firstMatch.exists || now != before { return }
-            print("РАЗБОР \(name): нажатие \(attempt) не сдвинуло переключатель (было \(before ?? "?"), стало \(now ?? "?"))")
+            if board.alerts.firstMatch.exists || toggle.value as? String != before {
+                if how != "касание" { print("РАЗБОР \(name): сработало только «\(how)»") }
+                return
+            }
+            print("РАЗБОР \(name): «\(how)» не сдвинуло переключатель")
         }
     }
 
@@ -783,157 +781,6 @@ final class Tour {
         for label in ["Отмена", "Закрыть"] {
             let b = app.navigationBars.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
             if b.exists && b.isHittable { b.tap(); pause(0.8) }
-        }
-    }
-
-    /// Пятничное напоминание по этапам: сразу, после листа «Подразделения», после карточки отдела в нём,
-    /// после смены страницы. Нажатие не дошло — в разбор дерево элементов.
-    func toggles() {
-        launch()
-        pause(6)                                             // заставка доигрывает
-        open("Настройки")
-        pause(1)
-        stageToggle("сразу после запуска")
-        // запись в отчёте, на которой проверять меню
-        open("Отчёт")
-        if let add = checkAdd("Отчёт, разбор"), tapAdd(add, opens: "Новая запись", "stage") {
-            type("Описание", "Проверка меню")
-            tapBarButton("Новая запись", "Сохранить")
-            pause(1.2)
-        }
-        entryMenu("Сохранить как шаблон")
-        tapBarButton("Новый шаблон", "Отмена")
-        pause(1)
-        open("Настройки")
-        stageToggle("после меню записи и шаблона")
-        entryMenu("Удалить")
-        pause(7)
-        open("Настройки")
-        stageToggle("после меню записи «Удалить»")
-        open("Главная")
-        tapFirst(app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "Начальнику")), "«Начальнику»")
-        if app.alerts.firstMatch.waitForExistence(timeout: 5) { app.alerts.firstMatch.buttons.firstMatch.tap() }
-        pause(1)
-        open("Настройки")
-        stageToggle("после окна ошибки почты")
-        unitsSheet(card: true)
-        stageToggle("после карточки отдела в листе")
-    }
-
-    /// Долгое нажатие на запись «Проверка меню» в отчёте и пункт меню.
-    private func entryMenu(_ item: String) {
-        open("Отчёт")
-        let rows = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Проверка меню"))
-        guard let row = reveal(rows, fromTop: true, tries: 4) else {
-            print("РАЗБОР меню: нет записи «Проверка меню»")
-            return
-        }
-        row.press(forDuration: 1.2)
-        let b = app.buttons[item]
-        if b.waitForExistence(timeout: 3) { b.tap() } else { print("РАЗБОР меню: нет пункта «\(item)»") }
-        pause(1.2)
-    }
-
-    /// Открыть и закрыть «Подразделения» (card — зайти в карточку «Филиал» и вернуться).
-    private func unitsSheet(card: Bool) {
-        guard let row = reveal(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Подразделения")),
-                               fromTop: true, tries: 10) else {
-            print("РАЗБОР лист: нет строки «Подразделения»")
-            return
-        }
-        row.tap()
-        guard app.navigationBars["Подразделения"].waitForExistence(timeout: 5) else {
-            print("РАЗБОР лист: «Подразделения» не открылись")
-            return
-        }
-        pause(0.8)
-        if card {
-            tapFirst(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Филиал")), "строка «Филиал»")
-            if app.navigationBars["Филиал"].waitForExistence(timeout: 5) {
-                pause(0.8)
-                app.navigationBars["Филиал"].buttons.element(boundBy: 0).tap()
-                pause(1)
-            } else {
-                print("РАЗБОР лист: карточка отдела не открылась")
-            }
-        }
-        tapBarButton("Подразделения", "Закрыть")
-        pause(1.5)
-    }
-
-    private func stageToggle(_ stage: String) {
-        let q = app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "Напомнить в пятницу"))
-        guard let t = reveal(q, fromTop: true, tries: 6) else {
-            print("РАЗБОР \(stage): переключателя не видно")
-            return
-        }
-        pause(1.5)
-        let before = t.value as? String
-        let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        func allowIfAsked() {
-            for label in ["Allow", "Разрешить"] where board.buttons[label].waitForExistence(timeout: 2) {
-                board.buttons[label].tap()
-                pause(1)
-                return
-            }
-        }
-        t.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
-        pause(1.2)
-        allowIfAsked()
-        let now = t.value as? String
-        print("РАЗБОР \(stage): было \(before ?? "?"), стало \(now ?? "?")")
-        shot("stage-" + stage.prefix(12))
-        if now == before {
-            print("РАЗБОР дерево (\(stage)) ↓\n" + app.debugDescription + "\nРАЗБОР дерево ↑")
-        } else {
-            t.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()      // как было
-            pause(1.2)
-            print("РАЗБОР \(stage): обратно → \((t.value as? String) ?? "?")")
-        }
-    }
-
-    /// Прежний разбор: каким нажатием срабатывают переключатели.
-    private func legacyToggles() {
-        for name in ["Шифровать бэкап", "Напомнить в пятницу"] {
-            guard let t = reveal(app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", name)), fromTop: true,
-                                 tries: 14) else {
-                print("РАЗБОР «\(name)»: переключателя нет на экране")
-                continue
-            }
-            pause(1.5)
-            let before = t.value as? String
-            print("РАЗБОР «\(name)»: рамка \(t.frame), окно \(screen), включён \(t.isEnabled), значение \(before ?? "?"), "
-                  + "вложенных switch \(t.switches.count)")
-            let ways: [(String, () -> Void)] = [
-                ("справа 0.93", { t.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap() }),
-                ("в 32 pt от правого края", {
-                    self.app.coordinate(withNormalizedOffset: .zero)
-                        .withOffset(CGVector(dx: t.frame.maxX - 32, dy: t.frame.midY)).tap()
-                }),
-                ("вложенный switch", { if t.switches.count > 0 { t.switches.firstMatch.tap() } }),
-                ("долгое справа", { t.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).press(forDuration: 0.3) }),
-                ("по центру", { t.tap() }),
-            ]
-            for (how, act) in ways {
-                guard t.isHittable else {
-                    print("РАЗБОР «\(name)»: закрыт другим окном перед «\(how)»")
-                    break
-                }
-                act()
-                pause(1.5)
-                let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-                for label in ["Allow", "Разрешить"] where board.buttons[label].exists { board.buttons[label].tap() }
-                if app.alerts.firstMatch.exists {
-                    print("РАЗБОР «\(name)» «\(how)»: окно — "
-                          + app.alerts.firstMatch.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " | "))
-                    app.alerts.firstMatch.buttons.firstMatch.tap()
-                    pause(1)
-                }
-                let now = t.value as? String
-                print("РАЗБОР «\(name)» «\(how)»: было \(before ?? "?"), стало \(now ?? "?")")
-                shot("\(name.prefix(8))-\(how.prefix(10))")
-                if now != before { break }
-            }
         }
     }
 
