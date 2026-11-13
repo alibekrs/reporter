@@ -115,6 +115,7 @@ final class Tour {
         printer.tap()                                         // раскрыть поля принтера
         pause(0.8)
         type("Модель", "HP LaserJet")
+        hideKeyboard()                                        // поле картриджа ниже — под клавиатурой его не видно
         type("Например, CF226", "CF226")
         hideKeyboard()
         for label in ["Куплен: указать", "Гарантия до: указать"] {
@@ -604,6 +605,12 @@ final class Tour {
             }
             print("РАЗБОР \(name): «\(how)» не сдвинуло переключатель")
         }
+        // в полосе ~650–690 pt симулятор CI теряет касания: сдвигаем список и жмём ещё раз
+        drag(fromY: 0.62, toY: 0.5)
+        guard toggle.isHittable else { return }
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        pause(1.2)
+        if toggle.value as? String != before { print("РАЗБОР \(name): сработало после прокрутки") }
     }
 
     /// Прокрутить, пока элемент не окажется на экране. fromTop — сначала к началу страницы.
