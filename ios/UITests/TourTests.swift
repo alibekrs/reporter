@@ -989,7 +989,7 @@ final class Tour {
         shot("assets-filled")
         tapBarButton("Новый сотрудник", "Сохранить")
         pause(1)
-        XCTAssertFalse(app.keyboards.firstMatch.exists, "карточка сотрудника: после «Сохранить» клавиатура не закрылась")
+        XCTAssertFalse(typing.exists, "карточка сотрудника: после «Сохранить» клавиатура не закрылась")
         shot("assets-saved")
         // карточка остаётся открытой в «Учёте», а другие страницы работают как обычно
         open("Отчёт")
@@ -1168,7 +1168,7 @@ final class Tour {
         pause(1.5)
         dismissKeyboardTip()
         XCTAssertTrue(tab("Учёт").isSelected, "«Найти» не перешла на «Учёт»")
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3), "«Найти» не открыла поиск с клавиатурой")
+        XCTAssertTrue(typing.waitForExistence(timeout: 3), "«Найти» не открыла поиск с клавиатурой")
         // панель и «+» уходят за клавиатуру, а не висят над ней
         XCTAssertFalse(tab("Главная").isHittable, "нижняя панель вылезла над клавиатурой")
         XCTAssertNil(visible(app.buttons.matching(NSPredicate(format: "label == %@", "Добавить"))),
@@ -1351,9 +1351,15 @@ final class Tour {
         pause(0.8)
     }
 
+    /// Поле, в которое сейчас печатают. Не app.keyboards: клавиатура — отдельный процесс, и на машинах CI
+    /// запрос к ней зависал на 90 секунд и обрывал проход.
+    private var typing: XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
+    }
+
     /// Спрятать клавиатуру, если открыта: кнопкой «Готово» над ней или прокруткой.
     private func hideKeyboard() {
-        guard app.keyboards.firstMatch.exists else { return }
+        guard typing.exists else { return }
         let done = app.buttons["Готово"]
         if done.exists && done.isHittable { done.tap() } else { drag(fromY: 0.3, toY: 0.5) }
         pause(0.8)
