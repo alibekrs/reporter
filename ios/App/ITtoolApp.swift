@@ -7,7 +7,14 @@ struct ITtoolApp: App {
     @StateObject private var store = Store()
 
     var body: some Scene {
-        WindowGroup { RootView().environmentObject(store) }
+        WindowGroup {
+            #if DEBUG
+            // проход по интерфейсу снимает варианты оформления (Gallery.swift); в IPA этого нет
+            if let page = Gallery.page { Gallery(page: page) } else { RootView().environmentObject(store) }
+            #else
+            RootView().environmentObject(store)
+            #endif
+        }
     }
 }
 
@@ -199,6 +206,7 @@ struct SettingsView: View {
     @AppStorage(Reminder.warrantyKey) private var warrantyOn = false
     @AppStorage(AppLock.key) private var lockOn = false
     @AppStorage(AppLock.mailKey) private var recoveryMail = ""
+    @AppStorage(AppLock.graceKey) private var grace = 300
     @State private var lockSetupOpen = false
     @State private var pinChangeOpen = false
     @State private var recoveryOpen = false
@@ -275,6 +283,14 @@ struct SettingsView: View {
                     }
                     .accessibilityIdentifier("lock.toggle")
                     if lockOn {
+                        Picker(selection: $grace) {
+                            Text("Сразу").tag(0)
+                            Text("Через 1 минуту").tag(60)
+                            Text("Через 5 минут").tag(300)
+                            Text("Через 15 минут").tag(900)
+                        } label: {
+                            Label("Закрывать после сворачивания", systemImage: "timer")
+                        }
                         Button { pinChangeOpen = true } label: {
                             Label("Сменить PIN-код", systemImage: "circle.grid.3x3.fill")
                         }
@@ -289,7 +305,7 @@ struct SettingsView: View {
                     }
                     .tint(.primary)
                 } header: { Text("Защита") } footer: {
-                    Text("Приложение закрывается, когда уходит в фон, и открывается по Face ID или PIN-коду. "
+                    Text("Свернули приложение дольше выбранного — при возвращении оно спросит Face ID или PIN-код. "
                          + "Забыли PIN-код — его сбросит ключ восстановления из письма; этот же ключ открывает "
                          + "зашифрованный бэкап, если забудете пароль.")
                 }

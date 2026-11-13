@@ -11,7 +11,6 @@ struct HomeView: View {
 
     @State private var shown = false
     @State private var grow = false
-    @State private var drift = false
     @State private var quote = Quotes.todayIndex
     @State private var summaryOpen = false
 
@@ -93,7 +92,6 @@ struct HomeView: View {
         guard !shown else { return }
         shown = true
         grow = true
-        withAnimation(.easeInOut(duration: 5).repeatForever(autoreverses: true)) { drift = true }
     }
 
     private var today: String {
@@ -201,7 +199,7 @@ struct HomeView: View {
         .background(Brand.gradient)
         .overlay(alignment: .topTrailing) {
             Circle().fill(Brand.sun.opacity(0.45)).frame(width: 110).blur(radius: 26)
-                .offset(x: drift ? -30 : 10, y: drift ? 30 : -14)
+                .offset(x: -10, y: 8)        // неподвижно: размытое пятно в вечной анимации грузило главную
                 .allowsHitTesting(false)
         }
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))

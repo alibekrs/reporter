@@ -7,6 +7,9 @@ import SwiftUI
 enum AppLock {
     static let key = "lock.on"
     static let mailKey = "lock.mail"
+    /// Сколько секунд после сворачивания приложение не закрывается (как в банковских): 0 — сразу.
+    static let graceKey = "lock.grace"
+    static var grace: Int { UserDefaults.standard.object(forKey: graceKey) as? Int ?? 300 }
     static let pinLength = 4
     private static let pinKey = "lock.pin"
     private static let failsKey = "lock.fails"
@@ -146,15 +149,16 @@ enum AppLock {
 final class LockScreen: ObservableObject {
     static let shared = LockScreen()
 
-    enum Step { case start, pin, forgot, newPin }
+    enum Step { case pin, forgot, newPin }
 
-    @Published var step = Step.start
+    @Published var step = Step.pin
     @Published var message = ""
     /// Приложение не на экране (переключатель приложений, окно Face ID): только значок и название, без кнопок.
     @Published private(set) var cover = false
     /// С входом приложение стартует закрытым.
     private(set) var locked: Bool
     private var asked = false               // Face ID после закрытия уже спрашивали — сам второй раз не спрашивает
+    private var leftAt: ContinuousClock.Instant?    // когда свернули открытое: часы идут и пока телефон спит
     private var asking = false
     private var window: UIWindow?
 
@@ -166,10 +170,13 @@ final class LockScreen: ObservableObject {
 
     /// Запуск приложения: окно входа встаёт раньше первого кадра — данные не мелькают.
     func start(in scene: UIWindowScene) {
+        #if DEBUG
+        if Gallery.page != nil { return }           // варианты оформления — без входа
+        #endif
         if locked { show(scene) }
     }
 
-    /// Ушли в фон — закрыть; вернулись — экран входа, и один раз сами спрашиваем Face ID.
+    /// Свернули — запоминаем когда; вернулись позже, чем через AppLock.grace, — экран входа и сразу Face ID.
     func scene(_ phase: ScenePhase) {
         guard AppLock.isOn else {
             locked = false
@@ -177,11 +184,15 @@ final class LockScreen: ObservableObject {
             return
         }
         if phase == .background {
-            locked = true
+            if !locked { leftAt = .now }
             asked = false
-            step = .start
+            step = .pin
             message = ""
             hideKeyboard()        // клавиатура живёт в своём окне выше входа — не оставляем её над ним
+        }
+        if phase == .active, let t = leftAt {
+            leftAt = nil
+            if ContinuousClock.now - t >= .seconds(AppLock.grace) { locked = true }
         }
         cover = phase != .active
         if locked || cover { show() } else { hide() }
@@ -199,9 +210,7 @@ final class LockScreen: ObservableObject {
         defer { asking = false }
         switch await AppLock.faceID() {
         case .ok: open()
-        case .pin:
-            step = .pin
-            message = ""
+        case .pin: message = ""
         case .cancel: break
         case .failed(let why): message = why
         }
@@ -280,34 +289,12 @@ struct LockView: View {
 
     @ViewBuilder private var content: some View {
         switch lock.step {
-        case .start: start
         case .pin:
             PinPad(title: "Введите PIN-код", message: lock.message, faceID: AppLock.biometry,
                    onFaceID: { Task { await lock.faceID() } }) { lock.enter($0) }
             forgotButton
         case .forgot: forgot
         case .newPin: NewPin(title: "Придумайте новый PIN-код") { lock.setPIN($0) }
-        }
-    }
-
-    private var start: some View {
-        VStack(spacing: 12) {
-            if let name = AppLock.biometry {
-                Button { Task { await lock.faceID() } } label: {
-                    Label("Войти по \(name)", systemImage: name == "Touch ID" ? "touchid" : "faceid")
-                        .font(.headline).frame(maxWidth: 260).padding(.vertical, 6)
-                }
-                .buttonStyle(.borderedProminent)
-            }
-            Button {
-                lock.message = ""
-                lock.step = .pin
-            } label: {
-                Text("Ввести PIN-код").font(.headline).frame(maxWidth: 260).padding(.vertical, 6)
-            }
-            .buttonStyle(.bordered)
-            forgotButton
-            note
         }
     }
 
@@ -349,7 +336,7 @@ struct LockView: View {
             Button("Назад") {
                 key = ""
                 lock.message = ""
-                lock.step = .start
+                lock.step = .pin
             }
             .font(.subheadline)
             note

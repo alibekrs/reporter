@@ -13,6 +13,9 @@ final class TourTests: XCTestCase {
 
     /// Светлая тема: все страницы с уже заведёнными данными.
     @MainActor func test2Light() { Tour(self, "light").light() }
+
+    /// Варианты оформления на выбор (Gallery.swift): по экрану на палитры, значок, панель, аватарки, названия.
+    @MainActor func test3Variants() { Tour(self, "variants").variants() }
 }
 
 @MainActor
@@ -387,6 +390,15 @@ final class Tour {
         app.buttons["Подтвердить ключ"].tap()
         pause(1.5)
         XCTAssertEqual(toggle.value as? String, "1", "Защита: вход не включился после PIN-кода и ключа")
+        // по умолчанию закрывается через 5 минут после сворачивания — для прохода «сразу»
+        if let grace = reveal(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Закрывать после")), tries: 3) {
+            grace.tap()
+            let now = app.buttons["Сразу"]
+            if now.waitForExistence(timeout: 3) { now.tap() } else { XCTFail("Защита: в «Закрывать после сворачивания» нет «Сразу»") }
+            pause(0.8)
+        } else {
+            XCTFail("Защита: нет «Закрывать после сворачивания»")
+        }
         shot("lock-on")
 
         // свернули: в переключателе приложений — только значок; вернулись — экран входа
@@ -394,8 +406,8 @@ final class Tour {
         pause(2)
         switcher()
         app.activate()
-        let enter = app.buttons["Ввести PIN-код"]
-        guard enter.waitForExistence(timeout: 8) else {
+        // экран входа — сразу цифры PIN-кода (Face ID спрашивается сам, в симуляторе его нет)
+        guard app.staticTexts["Введите PIN-код"].waitForExistence(timeout: 8) else {
             XCTFail("Защита: после сворачивания нет экрана входа")
             shot("lock-missing")
             return
@@ -405,7 +417,6 @@ final class Tour {
         XCTAssertTrue(app.buttons["Забыли PIN-код?"].exists, "Экран входа: нет «Забыли PIN-код?»")
         let faceID = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Войти по")).firstMatch.exists
         print("РАЗБОР вход: кнопка Face ID " + (faceID ? "есть" : "не показана — в симуляторе нет Face ID"))
-        enter.tap()
         enterPIN("9999")
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Неверный PIN-код")).firstMatch
             .waitForExistence(timeout: 3), "Экран входа: неверный PIN-код не отклонён")
@@ -483,17 +494,10 @@ final class Tour {
 
     /// Экран входа (вход включён шагом security) — открыть PIN-кодом. Экрана нет — ничего не делаем.
     private func unlock(_ shotName: String? = nil, wait: Double = 6) {
-        let enter = app.buttons["Ввести PIN-код"]
-        guard enter.waitForExistence(timeout: wait) else { return }
+        let title = app.staticTexts["Введите PIN-код"]
+        guard title.waitForExistence(timeout: wait) else { return }
         pause(0.8)
         if let shotName { shot(shotName) }
-        enter.tap()
-        let title = app.staticTexts["Введите PIN-код"]
-        guard title.waitForExistence(timeout: 4) else {
-            XCTFail("Вход: «Ввести PIN-код» не открыл цифры")
-            shot("unlock-stuck")
-            return
-        }
         enterPIN(Self.pin)
         if title.waitForNonExistence(timeout: 4) { return }
         // «Забыли PIN-код?» в шаге security не прошёл — тогда действует первый PIN-код
@@ -942,6 +946,16 @@ final class Tour {
             let b = app.navigationBars.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
             if b.exists && b.isHittable { b.tap(); pause(0.8) }
         }
+    }
+
+    func variants() {
+        for page in ["palettes", "icons", "tabbar", "avatars", "names"] {
+            app.launchEnvironment["REPORTER_GALLERY"] = page
+            launch()
+            pause(3)
+            shot(page)
+        }
+        app.launchEnvironment["REPORTER_GALLERY"] = nil
     }
 
     func light() {

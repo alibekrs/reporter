@@ -149,22 +149,17 @@ private struct TabIcon: View {
     }
 }
 
-/// Живой фон под стеклом: фирменные цвета медленно перетекают.
+/// Фон под стеклом: фирменные цвета. Неподвижный: живой фон перерисовывался 20 раз в секунду под всеми
+/// страницами сразу, и стекло над ним каждый кадр размывалось заново — приложение подвисало.
 struct AppBackground: View {
     @Environment(\.colorScheme) private var scheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 20, paused: reduceMotion)) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
-            let s = Float(sin(t * 0.35)) * 0.14
-            let c = Float(cos(t * 0.27)) * 0.14
-            MeshGradient(width: 3, height: 3, points: [
-                SIMD2<Float>(0, 0), SIMD2<Float>(0.5, 0), SIMD2<Float>(1, 0),
-                SIMD2<Float>(0, 0.5 + c), SIMD2<Float>(0.5 + s, 0.5 - c), SIMD2<Float>(1, 0.5 + s),
-                SIMD2<Float>(0, 1), SIMD2<Float>(0.5, 1), SIMD2<Float>(1, 1),
-            ], colors: scheme == .dark ? AppBackground.dark : AppBackground.light)
-        }
+        MeshGradient(width: 3, height: 3, points: [
+            SIMD2<Float>(0, 0), SIMD2<Float>(0.5, 0), SIMD2<Float>(1, 0),
+            SIMD2<Float>(0, 0.55), SIMD2<Float>(0.55, 0.45), SIMD2<Float>(1, 0.5),
+            SIMD2<Float>(0, 1), SIMD2<Float>(0.5, 1), SIMD2<Float>(1, 1),
+        ], colors: scheme == .dark ? AppBackground.dark : AppBackground.light)
         .ignoresSafeArea()
     }
 
