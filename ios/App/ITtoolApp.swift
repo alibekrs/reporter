@@ -7,14 +7,7 @@ struct ITtoolApp: App {
     @StateObject private var store = Store()
 
     var body: some Scene {
-        WindowGroup {
-            RootView().environmentObject(store)
-            #if DEBUG
-                // варианты оформления (Gallery.swift) — накладкой: обёртка-условие вокруг RootView
-                // прятала глубокие поля от проходов по интерфейсу; в IPA этого нет
-                .overlay { if let page = Gallery.page { Gallery(page: page) } }
-            #endif
-        }
+        WindowGroup { RootView().environmentObject(store) }
     }
 }
 

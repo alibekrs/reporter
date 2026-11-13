@@ -170,9 +170,6 @@ final class LockScreen: ObservableObject {
 
     /// Запуск приложения: окно входа встаёт раньше первого кадра — данные не мелькают.
     func start(in scene: UIWindowScene) {
-        #if DEBUG
-        if Gallery.page != nil { return }           // варианты оформления — без входа
-        #endif
         if locked { show(scene) }
     }
 

@@ -14,8 +14,6 @@ final class TourTests: XCTestCase {
     /// Светлая тема: все страницы с уже заведёнными данными.
     @MainActor func test2Light() { Tour(self, "light").light() }
 
-    /// Варианты оформления на выбор (Gallery.swift): по экрану на палитры, значок, панель, аватарки, названия.
-    @MainActor func test3Variants() { Tour(self, "variants").variants() }
 }
 
 @MainActor
@@ -953,16 +951,6 @@ final class Tour {
             let b = app.navigationBars.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
             if b.exists && b.isHittable { b.tap(); pause(0.8) }
         }
-    }
-
-    func variants() {
-        for page in ["palettes", "icons", "tabbar", "avatars", "names", "export"] {
-            app.launchEnvironment["REPORTER_GALLERY"] = page
-            launch()
-            pause(3)
-            shot(page)
-        }
-        app.launchEnvironment["REPORTER_GALLERY"] = nil
     }
 
     func light() {
