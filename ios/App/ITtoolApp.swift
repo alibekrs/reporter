@@ -8,11 +8,11 @@ struct ITtoolApp: App {
 
     var body: some Scene {
         WindowGroup {
-            #if DEBUG
-            // проход по интерфейсу снимает варианты оформления (Gallery.swift); в IPA этого нет
-            if let page = Gallery.page { Gallery(page: page) } else { RootView().environmentObject(store) }
-            #else
             RootView().environmentObject(store)
+            #if DEBUG
+                // варианты оформления (Gallery.swift) — накладкой: обёртка-условие вокруг RootView
+                // прятала глубокие поля от проходов по интерфейсу; в IPA этого нет
+                .overlay { if let page = Gallery.page { Gallery(page: page) } }
             #endif
         }
     }
