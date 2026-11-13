@@ -1427,7 +1427,8 @@ final class Tour {
     /// Поле ввода по подписи; многострочные поля — textView, пароли — secureTextField.
     private func type(_ title: String, _ text: String) {
         let p = NSPredicate(format: "label == %@ OR placeholderValue == %@", title, title)
-        let deadline = Date().addingTimeInterval(4)
+        // проверка трёх видов полей на CI идёт 3–8 с: при 4 с успевал один круг — сразу после ухода клавиатуры
+        let deadline = Date().addingTimeInterval(12)
         repeat {
             for q in [app.textFields, app.textViews, app.secureTextFields] {
                 let f = q.matching(p).firstMatch
