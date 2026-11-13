@@ -105,13 +105,13 @@ extension String {
 
 /// Письмо с ключом восстановления (PIN-код и зашифрованный бэкап): уходит с почты для отчёта.
 enum KeyMail {
-    static let subject = "REPORTER: ключ восстановления"
+    static let subject = "ITdesk: ключ восстановления"
 
     static func message(from: String, to: String, key: String) -> String {
-        let text = "Ключ восстановления REPORTER:\n\n" + RecoveryKey.pretty(key) + "\n\n"
+        let text = "Ключ восстановления ITdesk:\n\n" + RecoveryKey.pretty(key) + "\n\n"
             + "Он нужен, если забудете PIN-код входа: на экране входа нажмите «Забыли PIN-код?» и введите ключ.\n"
             + "Этот же ключ открывает зашифрованный бэкап вместо пароля — например, на новом телефоне.\n\n"
-            + "Сохраните это письмо и никому его не пересылайте. Если вы не включали защиту в REPORTER, удалите его."
+            + "Сохраните это письмо и никому его не пересылайте. Если вы не включали защиту в ITdesk, удалите его."
         return MIME.message(from: from, to: to, subject: subject, text: text)
     }
 }

@@ -1287,14 +1287,14 @@ final class Store: ObservableObject {
                 let sealed = try await Task.detached { try BackupCrypto.encrypt(json, secrets: secrets) }.value
                 fileId = try await Telegram.send(token: state.backupToken, chat: state.backupChat, file: sealed,
                                                  name: "REPORTER_бэкап_\(day).reporter", mime: "application/octet-stream",
-                                                 caption: "REPORTER · бэкап \(b.exported_at ?? day), зашифрован\n\(b.stats)\n"
+                                                 caption: "ITdesk · бэкап \(b.exported_at ?? day), зашифрован\n\(b.stats)\n"
                                                     + "Восстановить: Настройки → «Восстановить из бэкапа», нужен пароль "
                                                     + "бэкапа или ключ восстановления из письма.")
             } else {
                 try await Telegram.send(token: state.backupToken, chat: state.backupChat, file: Readable.xlsx(b),
                                         name: "REPORTER_бэкап_\(day).xlsx",
                                         mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                        caption: "REPORTER · бэкап \(b.exported_at ?? day)\n\(b.stats)\n"
+                                        caption: "ITdesk · бэкап \(b.exported_at ?? day)\n\(b.stats)\n"
                                             + "Excel — чтобы читать, JSON — чтобы восстановить в приложении.")
                 fileId = try await Telegram.send(token: state.backupToken, chat: state.backupChat, file: json,
                                                  name: "REPORTER_бэкап_\(day).json", mime: "application/json", caption: nil)

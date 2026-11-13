@@ -8,6 +8,34 @@ struct Gallery: View {
     let page: String
 
     var body: some View {
+        if page == "export" {
+            // значок приложения во всю ширину экрана (430 pt = 1290 px), без скругления — его делает iOS;
+            // снимок режется в icon-1024.png и logo.png
+            ZStack(alignment: .top) {
+                Color.black
+                exportIcon.padding(.top, 150)
+            }
+            .ignoresSafeArea()
+            .statusBarHidden()
+        } else {
+            gallery
+        }
+    }
+
+    private var exportIcon: some View {
+        let k: CGFloat = 430 / 132
+        return ZStack {
+            LinearGradient(colors: [hex(0x2DD4BF), hex(0x0F766E)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            LinearGradient(colors: [.white.opacity(0.25), .clear], startPoint: .top, endPoint: .center)
+            Image(systemName: "desktopcomputer").font(.system(size: 60 * k, weight: .semibold)).foregroundStyle(.white)
+            Image(systemName: "wrench.and.screwdriver.fill").font(.system(size: 30 * k, weight: .bold))
+                .foregroundStyle(hex(0xFDE047))
+                .shadow(color: .black.opacity(0.3), radius: 3 * k).offset(x: 34 * k, y: 34 * k)
+        }
+        .frame(width: 430, height: 430)
+    }
+
+    private var gallery: some View {
         ZStack {
             Color(red: 0.06, green: 0.07, blue: 0.10).ignoresSafeArea()
             VStack(alignment: .leading, spacing: 10) {

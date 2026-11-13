@@ -37,7 +37,7 @@ struct HomeView: View {
                 .padding(.bottom, 24)
             }
             .clearsBar()
-            .navigationTitle("REPORTER")
+            .navigationTitle("ITdesk")
             .sheet(isPresented: $summaryOpen) { SummaryView().presentationCornerRadius(24) }
         }
         .onAppear { if ready { start() } }

@@ -126,7 +126,7 @@ enum AppLock {
         c.localizedFallbackTitle = "Ввести PIN-код"
         let name = biometry ?? "Face ID"
         do {
-            let ok = try await c.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: "Вход в REPORTER")
+            let ok = try await c.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: "Вход в ITdesk")
             return ok ? .ok : .failed("iPhone не подтвердил, что это вы.")
         } catch let e as LAError {
             switch e.code {
@@ -270,7 +270,7 @@ struct LockView: View {
             AppBackground()
             VStack(spacing: 14) {
                 Image("Logo").resizable().scaledToFit().frame(height: digits ? 56 : 96)
-                Text("REPORTER").font(digits ? .headline : .title2.bold())
+                Text("ITdesk").font(digits ? .headline : .title2.bold())
                 if !lock.cover {
                     content
                         .padding(.top, 8)

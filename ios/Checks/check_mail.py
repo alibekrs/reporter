@@ -29,7 +29,7 @@ assert att.get_content() == open(f"{d}/week.docx", "rb").read(), "вложени
 print("Word и письмо в порядке")
 
 k = email.message_from_bytes(open(f"{d}/key.eml", "rb").read(), policy=policy.default)
-assert k["subject"] == "REPORTER: ключ восстановления", k["subject"]
+assert k["subject"] == "ITdesk: ключ восстановления", k["subject"]
 body = k.get_body(("plain",)).get_content()
 assert "ABCD-EFGH-JKLM" in body and "Забыли PIN-код?" in body, body
 assert not list(k.iter_attachments()), "в письме с ключом не должно быть вложений"

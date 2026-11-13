@@ -175,11 +175,12 @@ func applyTheme(_ t: Int) {
 
 // ── фирменные цвета ─────────────────────────────────────────────────────────
 enum Brand {
-    static let blue = Color(red: 10 / 255, green: 112 / 255, blue: 172 / 255)
-    static let sky = Color(red: 63 / 255, green: 164 / 255, blue: 232 / 255)
-    static let sun = Color(red: 242 / 255, green: 192 / 255, blue: 14 / 255)
-    static let gold = Color(red: 213 / 255, green: 159 / 255, blue: 0)        // жёлтый, читаемый на светлом
-    static let ink = Color(red: 0.23, green: 0.18, blue: 0)                   // тёмный текст и значки на жёлтом
+    // палитра «Индиго» (5.3): индиго и розовый акцент
+    static let blue = Color(red: 79 / 255, green: 70 / 255, blue: 229 / 255)
+    static let sky = Color(red: 129 / 255, green: 140 / 255, blue: 248 / 255)
+    static let sun = Color(red: 244 / 255, green: 114 / 255, blue: 182 / 255)
+    static let gold = Color(red: 219 / 255, green: 39 / 255, blue: 119 / 255)  // розовый, читаемый на светлом
+    static let ink = Color(red: 0.25, green: 0.04, blue: 0.16)                // тёмный текст и значки на розовом
     static let gradient = LinearGradient(colors: [sky, blue], startPoint: .topLeading, endPoint: .bottomTrailing)
 }
 
@@ -226,7 +227,7 @@ struct SettingsView: View {
                     VStack(spacing: 8) {
                         Image("Logo").resizable().scaledToFit().frame(height: 110)
                             .scaleEffect(appeared ? 1 : 0.6).opacity(appeared ? 1 : 0)
-                        Text("REPORTER").font(.title2.bold())
+                        Text("ITdesk").font(.title2.bold())
                         Text("Учёт техники · отчёт · картриджи").font(.caption).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity)
@@ -611,7 +612,7 @@ struct SettingsView: View {
         Task {
             if on, !(await Reminder.allow()) {
                 revert()
-                error = "Уведомления для REPORTER запрещены. Разрешите их в настройках iPhone: «Уведомления» → REPORTER."
+                error = "Уведомления для ITdesk запрещены. Разрешите их в настройках iPhone: «Уведомления» → ITdesk."
             }
             Reminder.refresh()
         }

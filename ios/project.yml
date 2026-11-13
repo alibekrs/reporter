@@ -17,7 +17,7 @@ targets:
         CFBundleDevelopmentRegion: ru
         CFBundleLocalizations: [ru]
         # без этой строки iOS не даёт приложению спросить Face ID (Настройки → «Вход по Face ID и PIN-коду»)
-        NSFaceIDUsageDescription: Вход в REPORTER по Face ID
+        NSFaceIDUsageDescription: Вход в ITdesk по Face ID
         # быстрые действия по долгому нажатию на иконку; разбирает SceneDelegate (Extras.swift)
         UIApplicationShortcutItems:
           - UIApplicationShortcutItemType: entry
@@ -42,7 +42,7 @@ targets:
         CURRENT_PROJECT_VERSION: "13"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: REPORTER
+        INFOPLIST_KEY_CFBundleDisplayName: ITdesk
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         TARGETED_DEVICE_FAMILY: "1"

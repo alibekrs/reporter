@@ -25,7 +25,7 @@ struct BackupFile: Codable {
              device_log, checklist
     }
 
-    static let readme = "Бэкап приложения REPORTER (раньше ITtool). units — подразделения, employees — сотрудники и их техника "
+    static let readme = "Бэкап приложения ITdesk (раньше REPORTER и ITtool). units — подразделения, employees — сотрудники и их техника "
         + "(pcs — компьютеры, monitors — мониторы, phones — телефоны, printers — принтеры; dismissed — дата увольнения), "
         + "storeroom — техника на складе, device_log — история техники, entries — записи "
         + "еженедельного отчёта, cartridges — выдачи картриджей, templates — шаблоны заявок (если их меняли), "
@@ -47,7 +47,7 @@ struct BackupFile: Codable {
         do {
             return try JSONDecoder().decode(BackupFile.self, from: data)
         } catch {
-            throw APIError(message: "Это не файл бэкапа REPORTER или он повреждён. Выберите файл .json, "
+            throw APIError(message: "Это не файл бэкапа ITdesk или он повреждён. Выберите файл .json, "
                            + "который присылает бот.")
         }
     }

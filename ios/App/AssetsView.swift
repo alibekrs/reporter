@@ -147,15 +147,46 @@ struct AssetsView: View {
     }
 }
 
+/// Сотрудник — значок его должности в цветном кружке; без должности (подсказки, выбор) — инициалы.
 struct Avatar: View {
     let name: String
+    var position: String? = nil
 
     var body: some View {
-        Text(initials)
-            .font(.subheadline.bold())
-            .foregroundStyle(.white)
-            .frame(width: 40, height: 40)
-            .background(Brand.gradient, in: Circle())
+        if let position {
+            let r = Self.role(position)
+            Image(systemName: r.icon)
+                .font(.system(size: 17))
+                .foregroundStyle(r.color)
+                .frame(width: 40, height: 40)
+                .background(r.color.opacity(0.2), in: Circle())
+                .accessibilityLabel(name)
+        } else {
+            Text(initials)
+                .font(.subheadline.bold())
+                .foregroundStyle(.white)
+                .frame(width: 40, height: 40)
+                .background(Brand.gradient, in: Circle())
+        }
+    }
+
+    /// По словам в должности; порядок важен: «главный бухгалтер» — бухгалтер, а не руководитель.
+    static func role(_ position: String) -> (icon: String, color: Color) {
+        let p = position.lowercased()
+        let rules: [([String], String, Color)] = [
+            (["бухгалт", "кассир", "финанс", "экономист"], "banknote.fill", .green),
+            (["админ", "программ", "системн", "айти", "it-", "it ", "1с"], "desktopcomputer", .blue),
+            (["юрист", "юрисконсульт", "правов"], "building.columns.fill", .purple),
+            (["кадр", "hr", "персонал"], "person.text.rectangle.fill", .teal),
+            (["водител"], "car.fill", .gray),
+            (["инженер", "механик", "электрик", "мастер", "техник"], "wrench.and.screwdriver.fill", .yellow),
+            (["секретар", "делопроизв", "офис"], "envelope.fill", .pink),
+            (["охран", "сторож"], "shield.fill", .red),
+            (["склад", "кладовщ", "снабжен", "завхоз"], "shippingbox.fill", .brown),
+            (["директор", "руковод", "начальник", "заведующ", "заместител", "глав"], "briefcase.fill", .orange),
+        ]
+        for (words, icon, color) in rules where words.contains(where: { p.contains($0) }) { return (icon, color) }
+        return ("person.fill", .gray)
     }
 
     private var initials: String {
@@ -170,7 +201,7 @@ struct EmployeeRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Avatar(name: Store.fio(e)).opacity(Store.isDismissed(e) ? 0.45 : 1)
+            Avatar(name: Store.fio(e), position: e["position"]?.string ?? "").opacity(Store.isDismissed(e) ? 0.45 : 1)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(Store.fio(e)).lineLimit(1)
@@ -236,7 +267,7 @@ struct EmployeeView: View {
         Form {
             Section {
                 HStack(spacing: 14) {
-                    Avatar(name: Store.fio(emp)).scaleEffect(1.4).padding(8)
+                    Avatar(name: Store.fio(emp), position: emp["position"]?.string ?? "").scaleEffect(1.4).padding(8)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(Store.fio(emp)).font(.headline).contentTransition(.opacity)
                         Text(store.units.first { $0.id == emp["unit_id"]?.string }?.path ?? "")

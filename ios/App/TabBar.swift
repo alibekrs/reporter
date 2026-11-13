@@ -15,11 +15,11 @@ enum AppTab: Int, CaseIterable, Hashable {
 
     var icon: String {
         switch self {
-        case .home: "house"
-        case .assets: "desktopcomputer"
-        case .report: "list.bullet.clipboard"
-        case .carts: "printer"
-        case .settings: "gearshape"
+        case .home: "house.circle.fill"
+        case .assets: "person.crop.circle.fill"
+        case .report: "doc.circle.fill"
+        case .carts: "drop.circle.fill"
+        case .settings: "gear.circle.fill"
         }
     }
 
@@ -164,14 +164,14 @@ struct AppBackground: View {
     }
 
     private static let light: [Color] = [
-        Color(red: 0.86, green: 0.93, blue: 0.99), Color(red: 0.95, green: 0.97, blue: 1.0), Color(red: 1.0, green: 0.95, blue: 0.80),
-        Color(red: 0.80, green: 0.90, blue: 0.99), Color(red: 0.93, green: 0.96, blue: 0.99), Color(red: 0.99, green: 0.93, blue: 0.78),
-        Color(red: 0.84, green: 0.89, blue: 1.0), Color(red: 0.90, green: 0.95, blue: 0.99), Color(red: 0.86, green: 0.93, blue: 0.99),
+        Color(red: 0.90, green: 0.90, blue: 1.0), Color(red: 0.97, green: 0.97, blue: 1.0), Color(red: 1.0, green: 0.91, blue: 0.95),
+        Color(red: 0.86, green: 0.87, blue: 1.0), Color(red: 0.95, green: 0.95, blue: 1.0), Color(red: 0.99, green: 0.90, blue: 0.94),
+        Color(red: 0.88, green: 0.88, blue: 1.0), Color(red: 0.94, green: 0.94, blue: 1.0), Color(red: 0.90, green: 0.90, blue: 1.0),
     ]
 
     private static let dark: [Color] = [
-        Color(red: 0.03, green: 0.10, blue: 0.18), Color(red: 0.02, green: 0.04, blue: 0.08), Color(red: 0.20, green: 0.15, blue: 0.02),
-        Color(red: 0.03, green: 0.16, blue: 0.28), Color(red: 0.02, green: 0.05, blue: 0.10), Color(red: 0.12, green: 0.10, blue: 0.02),
-        Color(red: 0.06, green: 0.10, blue: 0.25), Color(red: 0.02, green: 0.05, blue: 0.10), Color(red: 0.03, green: 0.10, blue: 0.18),
+        Color(red: 0.09, green: 0.07, blue: 0.28), Color(red: 0.02, green: 0.02, blue: 0.06), Color(red: 0.22, green: 0.06, blue: 0.15),
+        Color(red: 0.13, green: 0.10, blue: 0.40), Color(red: 0.03, green: 0.03, blue: 0.08), Color(red: 0.14, green: 0.04, blue: 0.10),
+        Color(red: 0.16, green: 0.17, blue: 0.42), Color(red: 0.03, green: 0.03, blue: 0.08), Color(red: 0.09, green: 0.07, blue: 0.28),
     ]
 }

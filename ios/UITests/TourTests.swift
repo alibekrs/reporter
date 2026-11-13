@@ -898,9 +898,9 @@ final class Tour {
         XCUIDevice.shared.press(.home)
         pause(1.5)
         let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        let icon = board.icons["REPORTER"]                   // запросы к домашнему экрану медленные — без лишних
+        let icon = board.icons["ITdesk"]                   // запросы к домашнему экрану медленные — без лишних
         guard icon.waitForExistence(timeout: 5) else {
-            print("РАЗБОР иконка: REPORTER не нашлась на домашнем экране — быстрое действие не проверено")
+            print("РАЗБОР иконка: ITdesk не нашлась на домашнем экране — быстрое действие не проверено")
             app.activate()
             return
         }
@@ -949,7 +949,7 @@ final class Tour {
     }
 
     func variants() {
-        for page in ["palettes", "icons", "tabbar", "avatars", "names"] {
+        for page in ["palettes", "icons", "tabbar", "avatars", "names", "export"] {
             app.launchEnvironment["REPORTER_GALLERY"] = page
             launch()
             pause(3)

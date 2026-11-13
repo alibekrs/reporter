@@ -26,7 +26,7 @@ struct SplashView: View {
         .onTapGesture { skip() }
         .allowsHitTesting(!opened)                     // пока раскрывается — приложение уже отвечает
         .accessibilityElement()
-        .accessibilityLabel("REPORTER")
+        .accessibilityLabel("ITdesk")
         .onAppear {
             // «Уменьшить движение»: сразу готовая картинка, потом раскрытие
             if reduceMotion { start = Date().addingTimeInterval(-SplashArt.calm) }
@@ -202,7 +202,7 @@ private struct SplashArt {
         let fs = min(W * 0.1, 40)
         let font = Font.system(size: fs, weight: .black)
         let base = cy + L * 0.72 + fs                  // линия, на которой стоят буквы
-        let word = Array("REPORTER")
+        let word = Array("ITdesk")
         var widths: [Double] = []
         for ch in word {
             widths.append(Double(ctx.resolve(Text(String(ch)).font(font)).measure(in: Self.big).width))
@@ -283,9 +283,9 @@ private struct SplashArt {
         func color(_ a: Double = 1) -> Color { Color(red: r, green: g, blue: b, opacity: a) }
     }
 
-    private static let night = RGB(0x061423), dawnSky = RGB(0x123a5c), deep = RGB(0x040c16), black = RGB(0x010306)
-    private static let star = RGB(0xcfe6ff), sun = RGB(0xf2c00e), sky = RGB(0x3fa4e8)
-    private static let spark = RGB(0xffd84a), ice = RGB(0x7cc6ff), white = RGB(0xffffff)
+    private static let night = RGB(0x0b0a24), dawnSky = RGB(0x2a2470), deep = RGB(0x06051a), black = RGB(0x020108)
+    private static let star = RGB(0xe0e3ff), sun = RGB(0xf472b6), sky = RGB(0x818cf8)
+    private static let spark = RGB(0xf9a8d4), ice = RGB(0xa5b4fc), white = RGB(0xffffff)
 
     // ── звёзды и искры: одни и те же при каждом запуске (тот же генератор, что в прототипе) ──
 
