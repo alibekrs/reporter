@@ -221,11 +221,10 @@ final class LockScreen: ObservableObject {
         open()
     }
 
+    /// Шаг и подсказку не сбрасываем: окно ещё гаснет, и экран мелькнул бы кнопками. Сброс — при уходе в фон.
     private func open() {
         AppLock.clearFails()
         locked = false
-        step = .start
-        message = ""
         hide()
     }
 
