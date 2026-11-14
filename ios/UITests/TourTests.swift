@@ -91,10 +91,13 @@ final class Tour {
             let field = app.searchFields.firstMatch
             if field.waitForExistence(timeout: 4) {
                 field.tap()
+                dismissKeyboardTip()
                 field.typeText("Тестов")
                 pause(1.5)
+                dismissKeyboardTip()                  // «Speed up your typing…» всплывает и после набора
             }
             shot("search-global")
+            closeSearch()                             // пока идёт поиск, «Закрыть» листа спрятана — сначала выйти из поиска
             tidy()
             pause(0.8)
         } else {
@@ -150,13 +153,16 @@ final class Tour {
         // заявка «в работе»: на главной карточка, в отчёте — метка, по долгому нажатию — «Закрыть заявку»
         open("Отчёт")
         if let add = checkAdd("Отчёт, в работе"), tapAdd(add, opens: "Новая запись", "inwork") {
+            // «В работе» — вверху листа, поэтому сначала он: рывок вниз у начала листа закрывает сам лист
+            if let t = reveal(app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "В работе")), tries: 2) {
+                flip(t, "inwork")
+            } else {
+                XCTFail("Запись: нет переключателя «В работе»")
+            }
+            shot("entry-inwork")
             type("Сотрудник / объект", "Тестов 02")
             type("Описание", "Не включается монитор")
             hideKeyboard()
-            if let t = reveal(app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "В работе")), fromTop: true, tries: 4) {
-                flip(t, "inwork")
-            }
-            shot("entry-inwork")
             tapBarButton("Новая запись", "Сохранить")
             pause(1.2)
             open("Главная")
@@ -297,6 +303,14 @@ final class Tour {
         tidy()
         open("Учёт")
         guard openEmployee("Иванов Иван Петрович") else { return }
+        // сверху вниз: день рождения выше связи. Тянуть карточку вниз у её начала нельзя — так она закрывается (п. 147)
+        if let b = reveal(app.buttons.matching(NSPredicate(format: "label == %@", "День рождения: указать")), tries: 10) {
+            b.tap()
+            pause(0.6)
+        } else {
+            XCTFail("Карточка: нет «День рождения: указать»")
+        }
+        shot("employee-birthday")
         let p = { (t: String) in NSPredicate(format: "label == %@ OR placeholderValue == %@", t, t) }
         if reveal(app.textFields.matching(p("Телефон")), tries: 10) != nil {
             type("Телефон", "+7 701 000 00 00")
@@ -305,14 +319,6 @@ final class Tour {
             XCTFail("Карточка: нет поля «Телефон»")
         }
         hideKeyboard()
-        if let b = reveal(app.buttons.matching(NSPredicate(format: "label == %@", "День рождения: указать")), fromTop: true,
-                          tries: 10) {
-            b.tap()
-            pause(0.6)
-        } else {
-            XCTFail("Карточка: нет «День рождения: указать»")
-        }
-        shot("employee-birthday")
         tapBarButton("Иванов Иван Петрович", "Сохранить")
         pause(1)
         if reveal(app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Позвонить")), tries: 6) == nil {
@@ -958,9 +964,9 @@ final class Tour {
     private func reminder() {
         tidy()
         open("Настройки")
-        for _ in 0..<2 { drag(fromY: 0.3, toY: 0.8) }
-        let toggle = app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "Напомнить в пятницу")).firstMatch
-        guard toggle.waitForExistence(timeout: 3) else {
+        // в 5.5 над ним добавились строки оформления — без прокрутки строка ещё не построена
+        let q = app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "Напомнить в пятницу"))
+        guard let toggle = reveal(q, fromTop: true, tries: 10) else {
             XCTFail("Настройки: нет переключателя «Напомнить в пятницу»")
             return
         }
