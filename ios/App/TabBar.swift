@@ -64,6 +64,9 @@ struct GlassTabBar: View {
                         TabIcon(tab: t, active: t == shown, trigger: taps[t, default: 0])
                             .frame(width: w, height: geo.size.height)
                             .accessibilityElement(children: .combine)
+                            // рамка для VoiceOver и тестов — вся ячейка, как и касание (жест ловит всю панель);
+                            // по одному значку между ними были «дыры», и кнопки страницы под панелью казались нажимаемыми
+                            .contentShape(.accessibility, Rectangle())
                             .accessibilityAddTraits(t == selection ? [.isButton, .isSelected] : .isButton)
                             .accessibilityAction { onSelect(t) }
                     }

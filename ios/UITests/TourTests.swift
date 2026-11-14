@@ -708,9 +708,22 @@ final class Tour {
         if fromTop { for _ in 0..<6 { drag(fromY: 0.3, toY: 0.85) } }
         for _ in 0..<tries {
             if let e = tappable(q) { return e }
-            drag(fromY: 0.72, toY: 0.38)
+            if isAbove(q.firstMatch) {
+                // уже построен, но выше экрана: страница не у начала, так что рывок вниз её только прокрутит,
+                // а не закроет карточку или лист
+                drag(fromY: 0.4, toY: 0.62)
+            } else {
+                drag(fromY: 0.72, toY: 0.38)
+            }
         }
         return tappable(q)
+    }
+
+    /// Элемент на этой странице (не на соседней за краем), но выше видимой части — под заголовком или над экраном.
+    private func isAbove(_ e: XCUIElement) -> Bool {
+        guard e.exists else { return false }
+        let f = e.frame, s = screen
+        return f.minX >= s.minX && f.maxX <= s.maxX && f.midY < s.minY + 115     // заголовок кончается ~на 103 pt
     }
 
     /// Набранная запись не стирается, если из неё зайти в «Изменить шаблоны» и вернуться.
