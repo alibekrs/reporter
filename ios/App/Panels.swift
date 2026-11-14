@@ -606,8 +606,10 @@ struct ProfileView: View {
                         }
                     }
                     HStack(spacing: 10) {
-                        StatCard(title: "заявок", value: store.state.entries.count, icon: "list.bullet.clipboard", color: Brand.blue)
-                        StatCard(title: "картриджей", value: store.state.carts.reduce(0) { $0 + $1.qty }, icon: "printer.fill",
+                        let entries = store.state.entries.count, carts = store.state.carts.reduce(0) { $0 + $1.qty }
+                        StatCard(title: plural(entries, "заявка", "заявки", "заявок"), value: entries,
+                                 icon: "list.bullet.clipboard", color: Brand.blue)
+                        StatCard(title: plural(carts, "картридж", "картриджа", "картриджей"), value: carts, icon: "printer.fill",
                                  color: .orange)
                         StatCard(title: "техники", value: store.allDevices.count, icon: "desktopcomputer", color: .teal)
                     }
