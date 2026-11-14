@@ -168,18 +168,24 @@ struct SummaryView: View {
         .padding(.vertical, 4)
     }
 
-    /// Горизонтальные столбики: вырастают слева направо, справа — число.
+    /// Горизонтальные столбики: название над столбиком, столбик вырастает слева направо, справа — число.
+    /// Подписи оси наезжали на столбики и перечёркивались сеткой — ось спрятана, название стоит над столбиком.
     @ViewBuilder private func chart(_ title: String, _ items: [Summary.Top], _ color: Color) -> some View {
         if !items.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 Text(title).font(.subheadline.weight(.semibold))
                 Chart(items) { t in
-                    BarMark(x: .value("Сколько", grown ? t.count : 0), y: .value("Что", t.name))
+                    BarMark(x: .value("Сколько", grown ? t.count : 0), y: .value("Что", t.name), height: .fixed(12))
                         .foregroundStyle(color.gradient)
+                        .cornerRadius(6)
+                        .annotation(position: .top, alignment: .leading, spacing: 2) {
+                            Text(t.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
                         .annotation(position: .trailing) { Text("\(t.count)").font(.caption2).foregroundStyle(.secondary) }
                 }
                 .chartXAxis(.hidden)
-                .frame(height: CGFloat(items.count) * 30 + 10)
+                .chartYAxis(.hidden)
+                .frame(height: CGFloat(items.count) * 48)
             }
             .padding(.vertical, 4)
         }

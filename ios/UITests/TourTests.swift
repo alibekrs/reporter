@@ -923,7 +923,7 @@ final class Tour {
             XCTFail("Главная: сводка не открылась")
             return
         }
-        pause(0.8)
+        pause(1.8)                                           // столбики графиков вырастают ~1 с после открытия
         shot("summary-month")
         tapFirst(app.buttons.matching(NSPredicate(format: "label == %@", "Год")), "сегмент «Год»")
         pause(1)
