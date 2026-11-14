@@ -1482,10 +1482,12 @@ final class Tour {
         app.launch()
     }
 
-    /// Листание страниц пальцем на 58% высоты: ниже переключателя темы и карточки недели.
+    /// Листание страниц пальцем на 58% высоты: ниже карточки недели. На настройках там «Авто / Светлая / Тёмная» —
+    /// сегменты сами ловят палец, поэтому там листаем выше, рядом со значком.
     private func swipe(left: Bool) {
-        let a = app.coordinate(withNormalizedOffset: CGVector(dx: left ? 0.85 : 0.15, dy: 0.58))
-        let b = app.coordinate(withNormalizedOffset: CGVector(dx: left ? 0.15 : 0.85, dy: 0.58))
+        let y = tab("Настройки").isSelected ? 0.3 : 0.58
+        let a = app.coordinate(withNormalizedOffset: CGVector(dx: left ? 0.85 : 0.15, dy: y))
+        let b = app.coordinate(withNormalizedOffset: CGVector(dx: left ? 0.15 : 0.85, dy: y))
         a.press(forDuration: 0.05, thenDragTo: b, withVelocity: .fast, thenHoldForDuration: 0)
         pause(1.2)
     }

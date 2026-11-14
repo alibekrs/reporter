@@ -152,7 +152,7 @@ struct MascotMenu: View {
 
     var body: some View {
         ZStack {
-            if !Motion.reduced { goo }
+            if !Motion.reduced && shown { goo }        // робот спрятан (клавиатура) — капля под ним не торчит точкой
             ForEach(Array(Self.items.enumerated()), id: \.element) { i, item in bubble(item, i) }
             tray
             bot
@@ -204,6 +204,13 @@ struct MascotMenu: View {
             .frame(width: 52, height: 52)
             .background { if Motion.reduced { Circle().fill(Brand.blue) } }   // без жидкости — просто кружок
             .contentShape(Circle())
+            .onTapGesture { tap(item) }
+            .onLongPressGesture(minimumDuration: 0.35) { show(item) }
+            // кнопка — только кружок: подпись рядом не входит в её рамку, иначе центр рамки уезжает с кружка
+            .accessibilityElement()
+            .accessibilityLabel(item.title)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { tap(item) }
             .overlay(alignment: .trailing) {
                 if fanned && (hint == item || allLabels) { label(item.title).offset(x: -60) }
             }
@@ -211,13 +218,7 @@ struct MascotMenu: View {
             .opacity(fanned ? 1 : 0)
             .offset(fanned ? spot(i) : .zero)
             .animation(spring(i), value: fanned)
-            .onTapGesture { tap(item) }
-            .onLongPressGesture(minimumDuration: 0.35) { show(item) }
             .allowsHitTesting(fanned)
-            .accessibilityElement()
-            .accessibilityLabel(item.title)
-            .accessibilityAddTraits(.isButton)
-            .accessibilityAction { tap(item) }
             .accessibilityHidden(!fanned)
     }
 
@@ -229,6 +230,7 @@ struct MascotMenu: View {
             .fixedSize()
             .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .trailing)))
             .allowsHitTesting(false)
+            .accessibilityHidden(true)          // VoiceOver читает название у самой кнопки
     }
 
     /// Лоток тем: две строки кружков над роботом; выбрали — новая тема расходится кругом от пальца.
@@ -269,21 +271,22 @@ struct MascotMenu: View {
         PixelBot(mood: mood)
             .frame(width: Self.size, height: Self.size)
             .contentShape(Circle())
-            .scaleEffect(shown ? 1 : 0.2)
-            .opacity(shown ? 1 : 0)
-            .animation(.spring(response: 0.45, dampingFraction: 0.65), value: shown)
             .onTapGesture { toggle() }
-            .allowsHitTesting(shown)
             .feel(.impact(weight: .light), trigger: taps)
+            // кнопка — только робот: с подсказкой в рамке её центр приходился на «Найти» главной
+            .accessibilityElement()
+            .accessibilityLabel(open ? "Закрыть быстрые действия" : "Быстрые действия")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { toggle() }
             .overlay(alignment: .topTrailing) {
                 if !greeted && shown && !open {
                     label("Нажми на меня — быстрые действия").offset(x: -6, y: -40)
                 }
             }
-            .accessibilityElement()
-            .accessibilityLabel(open ? "Закрыть быстрые действия" : "Быстрые действия")
-            .accessibilityAddTraits(.isButton)
-            .accessibilityAction { toggle() }
+            .scaleEffect(shown ? 1 : 0.2)
+            .opacity(shown ? 1 : 0)
+            .animation(.spring(response: 0.45, dampingFraction: 0.65), value: shown)
+            .allowsHitTesting(shown)
             .accessibilityHidden(!shown)
             .task { await blinking() }
     }
