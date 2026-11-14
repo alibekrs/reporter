@@ -77,7 +77,91 @@ final class Tour {
         units()
         reminder()
         whatsNew51()
+        whatsNew55()
         iconAction()
+    }
+
+    /// Нововведения 5.5: общий поиск, профиль, должности, проверка данных, сеть, графики, заявка «в работе», карточка.
+    private func whatsNew55() {
+        tidy()
+        open("Главная")
+        if let s = visible(app.buttons.matching(NSPredicate(format: "label == %@", "Поиск по всему"))) {
+            s.tap()
+            let field = app.searchFields.firstMatch
+            if field.waitForExistence(timeout: 4) {
+                field.tap()
+                field.typeText("Тестов")
+                pause(1.5)
+            }
+            shot("search-global")
+            tidy()
+            pause(0.8)
+        } else {
+            XCTFail("Главная: нет кнопки «Поиск по всему»")
+        }
+        open("Настройки")
+        for (label, name) in [("Профиль и достижения", "profile"), ("Должности", "positions"), ("Проверка данных", "audit")] {
+            guard let b = reveal(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", label)), fromTop: true, tries: 14)
+            else {
+                XCTFail("Настройки: нет «\(label)»")
+                continue
+            }
+            b.tap()
+            pause(1.5)
+            shot(name)
+            tidy()
+            pause(0.8)
+        }
+        open("Учёт")
+        if let net = reveal(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Сеть")), fromTop: true, tries: 14) {
+            net.tap()
+            pause(1)
+            if let plus = visible(app.buttons.matching(NSPredicate(format: "label == %@", "Добавить устройство сети"))) {
+                plus.tap()
+                pause(1)
+                type("Название, например «Роутер 2 этаж»", "Роутер 2 этаж")
+                type("IP-адрес", "192.168.1.1")
+                hideKeyboard()
+                shot("network-edit")
+                tapBarButton("Новое в сети", "Сохранить")
+                pause(1)
+            }
+            shot("network")
+            backToList("Сеть")
+        } else {
+            XCTFail("Учёт: нет строки «Сеть»")
+        }
+        if openEmployee("Тестов 01") {
+            pause(1)
+            shot("employee-55")
+            backToList("Тестов 01")
+        }
+        open("Главная")
+        if let sum = reveal(app.buttons.matching(NSPredicate(format: "label == %@", "Сводка за месяц и год")), tries: 6) {
+            sum.tap()
+            pause(1.5)
+            drag(fromY: 0.75, toY: 0.35)
+            pause(1)
+            shot("summary-charts")
+            tidy()
+            pause(0.8)
+        }
+        // заявка «в работе»: на главной карточка, в отчёте — метка, по долгому нажатию — «Закрыть заявку»
+        open("Отчёт")
+        if let add = checkAdd("Отчёт, в работе"), tapAdd(add, opens: "Новая запись", "inwork") {
+            type("Сотрудник / объект", "Тестов 02")
+            type("Описание", "Не включается монитор")
+            hideKeyboard()
+            if let t = reveal(app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "В работе")), fromTop: true, tries: 4) {
+                flip(t, "inwork")
+            }
+            shot("entry-inwork")
+            tapBarButton("Новая запись", "Сохранить")
+            pause(1.2)
+            open("Главная")
+            pause(1)
+            shot("home-inwork")
+        }
     }
 
     /// Нововведения 5.1: жизнь техники, сотрудники, корзина, защита, бэкап.
@@ -1451,6 +1535,10 @@ final class Tour {
             if let e = visible(q) { e.tap(); return }
             pause(0.3)
         } while Date() < deadline
+        if let e = reveal(q, tries: 4) {           // на главной карточек стало больше — кнопка ниже края
+            e.tap()
+            return
+        }
         XCTFail("не нашлась \(what)")
     }
 
