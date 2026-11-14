@@ -37,6 +37,7 @@ final class Tour {
     private static let firstPIN = "1234"
     private static let pin = "2580"                         // после «Забыли PIN-код?»
     private static let withAdd: Set = ["Главная", "Учёт", "Отчёт", "Картриджи", "Настройки"]   // талисман — везде
+    private static var labelsShot = false                   // снимок меню с подписями уже есть
 
     init(_ test: XCTestCase, _ name: String) {
         self.test = test
@@ -1408,7 +1409,13 @@ final class Tour {
         guard let button else {
             XCTFail("\(page): в меню талисмана нет «\(item)»")
             shot(page + "-menu-fail")
+            // открытое меню притеняет страницы и ловит нажатия — закрыть, чтобы не валить следующие шаги
+            visible(app.buttons.matching(NSPredicate(format: "label == %@", "Закрыть быстрые действия")))?.tap()
             return false
+        }
+        if !Self.labelsShot {               // первое открытие: подписи у всех кнопок сразу — снимок, как они стоят
+            Self.labelsShot = true
+            shot(page + "-menu-labels")
         }
         button.tap()
         if app.navigationBars[title].waitForExistence(timeout: 4) { return true }

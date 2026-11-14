@@ -211,8 +211,8 @@ struct MascotMenu: View {
             .accessibilityLabel(item.title)
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { tap(item) }
-            .overlay(alignment: .trailing) {
-                if fanned && (hint == item || allLabels) { label(item.title).offset(x: -60) }
+            .overlay(alignment: labelPlace(i).0) {
+                if fanned && (hint == item || allLabels) { label(item.title).offset(labelPlace(i).1) }
             }
             .scaleEffect(fanned ? 1 : 0.3)
             .opacity(fanned ? 1 : 0)
@@ -220,6 +220,16 @@ struct MascotMenu: View {
             .animation(spring(i), value: fanned)
             .allowsHitTesting(fanned)
             .accessibilityHidden(!fanned)
+    }
+
+    /// Подпись у кнопки: слева от кружка, у самой верхней — над ним, у соседней с ней — слева чуть выше:
+    /// при первом открытии подписи видны у всех сразу, и две верхние иначе наезжали друг на друга.
+    private func labelPlace(_ i: Int) -> (Alignment, CGSize) {
+        switch Self.items.count - 1 - i {
+        case 0: (.topTrailing, CGSize(width: 0, height: -36))
+        case 1: (.trailing, CGSize(width: -60, height: -12))
+        default: (.trailing, CGSize(width: -60, height: 0))
+        }
     }
 
     private func label(_ text: String) -> some View {
