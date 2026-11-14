@@ -62,9 +62,9 @@ struct CartridgesView: View {
                 }
             }
             if data.items.isEmpty {
-                ContentUnavailableView(query.isEmpty ? "Выдач нет" : "Ничего не найдено",
+                EmptyState(query.isEmpty ? "Выдач нет" : "Ничего не найдено",
                                        systemImage: "printer.dotmatrix",
-                                       description: Text("Отметьте выдачу кнопкой «+»."))
+                                       description: Text("Нажмите на робота внизу справа — «Выдать картридж»."))
             }
         }
         .scrollContentBackground(.hidden)

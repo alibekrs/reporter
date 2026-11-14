@@ -7,6 +7,7 @@ struct ReportView: View {
     @State private var toast: String?
     @State private var flips = 0
     @State private var mailing = false
+    @State private var party = 0               // отчёт ушёл — конфетти
     @State private var mailAsk: String?
     @State private var error: String?
     @State private var query = ""
@@ -51,6 +52,7 @@ struct ReportView: View {
                 Button("Отправить") { Task { await sendMail() } }
             }
             .errorAlert($error)
+            .overlay { Confetti(trigger: party) }
             .toast($toast) { if store.undoDelete() { toast = "Возвращено" } }
         }
     }
@@ -83,6 +85,7 @@ struct ReportView: View {
         defer { mailing = false }
         do {
             toast = try await ReportMail.send(MailSettings.load(), monday: monday, entries: store.reportEntries(week: monday))
+            party += 1                             // конфетти и самолётик: отчёт ушёл
             Reminder.sent(monday)                  // отчёт ушёл — пятничное напоминание за эту неделю не нужно
         } catch { self.error = error.localizedDescription }
     }
@@ -133,8 +136,8 @@ struct ReportView: View {
                     }
                 }
                 if week.isEmpty {
-                    ContentUnavailableView("Записей нет", systemImage: "tray",
-                                           description: Text("За эту неделю пока ничего. Нажмите «+», чтобы добавить."))
+                    EmptyState("Записей нет", systemImage: "tray",
+                                           description: Text("За эту неделю пока ничего. Нажмите на робота внизу справа, чтобы добавить."))
                 }
             }
         }

@@ -23,7 +23,14 @@ struct RootView: View {
     @State private var splash = SceneDelegate.pending == nil && !LockScreen.shared.locked
     // заставка раскрывается — карточки главной выезжают
     @State private var revealed = SceneDelegate.pending != nil || LockScreen.shared.locked
-    @State private var keyboard = false             // клавиатура на экране — панель и «+» прячутся
+    @State private var keyboard = false             // клавиатура на экране — панель и талисман прячутся
+    @AppStorage(Theme.key) private var palette = Theme.defaultID
+    @State private var menu = false                 // открыто меню талисмана
+    @State private var celebrate = false            // талисман радуется: бэкап ушёл
+    @State private var plane = false                // самолётик бэкапа на экране
+    @State private var planeGo = false              // и улетает
+    @State private var note: String?                // плашка сверху
+    @State private var failure: String?
 
     var body: some View {
         // размер страниц задаём явно: с containerRelativeFrame лента вылезала за экран и панель уезжала вниз
@@ -51,10 +58,21 @@ struct RootView: View {
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
+        // смена темы: страницы пересоздаются в новых цветах (вкладка остаётся та же)
+        .id(palette)
         .background(AppBackground())
+        .overlay {
+            // открыто меню талисмана — страницы притушены, нажатие мимо закрывает
+            if menu {
+                Color.black.opacity(0.3).ignoresSafeArea()
+                    .onTapGesture { withAnimation(.spring(response: 0.38, dampingFraction: 0.85)) { menu = false } }
+                    .transition(.opacity)
+                    .accessibilityHidden(true)
+            }
+        }
         .overlay(alignment: .bottom) {
             ZStack(alignment: .bottomTrailing) {
-                // при клавиатуре панель и «+» прячутся: страницы сжимаются над ней, и панель закрывала поля
+                // при клавиатуре панель и талисман прячутся: страницы сжимаются над ней, и панель закрывала поля
                 GlassTabBar(selection: tab, progress: progress) { t in
                     go(t)
                 }
@@ -63,12 +81,16 @@ struct RootView: View {
                 .opacity(keyboard ? 0 : 1)
                 .allowsHitTesting(!keyboard)
                 .accessibilityHidden(keyboard)
-                // «+» одна на все страницы и стоит над панелью: на списке страницы она уезжала под панель
-                AddButton(shown: addAction != nil && !keyboard) { if let a = addAction { store.action = a } }
-                    .padding(.trailing, 20)
-                    .padding(.bottom, 2 + GlassTabBar.height + 14)
+                if plane { flyingPlane }
+                // талисман вместо «+» — на всех вкладках, над панелью; над карточкой сотрудника его нет
+                MascotMenu(open: $menu, shown: !keyboard && !cardOpen, celebrate: celebrate) { act($0) }
+                    .padding(.trailing, 14)
+                    .padding(.bottom, 2 + GlassTabBar.height + 8)
             }
+            .errorAlert($failure)
         }
+        .toast($note)
+        .fontDesign(Theme.current.mono ? .monospaced : nil)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
             withAnimation(.easeOut(duration: 0.15)) { keyboard = true }
         }
@@ -138,11 +160,55 @@ struct RootView: View {
     /// На экране «Учёт» с открытой карточкой сотрудника. Другие страницы при этом листаются как обычно.
     private var cardOpen: Bool { store.lockPaging && tab == .assets }
 
-    /// «+» страницы, которая сейчас на экране (по прокрутке, чтобы не мигала на полпути);
-    /// над открытой карточкой сотрудника кнопки нет.
-    private var addAction: QuickAction? {
-        let current = AppTab(rawValue: Int(progress.rounded()))
-        return current == .assets && store.lockPaging ? nil : current?.add
+    /// Кнопка из блокнота талисмана.
+    private func act(_ item: MascotItem) {
+        switch item {
+        case .entry: store.action = .newEntry; go(.report)
+        case .cart: store.action = .newCart; go(.carts)
+        case .employee: store.action = .newEmployee; go(.assets)
+        case .backup: sendBackup()
+        case .theme: break                          // темы выбираются в лотке самого талисмана
+        }
+    }
+
+    /// Бэкап из меню: самолётик улетает, по итогу — плашка и радость талисмана или понятная ошибка.
+    private func sendBackup() {
+        if !Motion.reduced {
+            plane = true
+            Task {
+                try? await Task.sleep(for: .milliseconds(30))
+                withAnimation(.easeIn(duration: 0.9)) { planeGo = true }
+                try? await Task.sleep(for: .seconds(1))
+                plane = false
+                planeGo = false
+            }
+        }
+        Task {
+            await store.backup(force: true)
+            let s = store.backupStatus ?? ""
+            guard s.hasPrefix("Бэкап отправлен") else {
+                failure = s.isEmpty ? "Бэкап не отправлен." : s
+                return
+            }
+            note = s
+            celebrate = true
+            try? await Task.sleep(for: .seconds(2))
+            celebrate = false
+        }
+    }
+
+    private var flyingPlane: some View {
+        Image(systemName: "paperplane.fill")
+            .font(.system(size: 28, weight: .semibold))
+            .foregroundStyle(Brand.sky)
+            .rotationEffect(.degrees(planeGo ? -35 : 0))
+            .scaleEffect(planeGo ? 0.6 : 1)
+            .offset(x: planeGo ? 40 : 0, y: planeGo ? -640 : 0)
+            .opacity(planeGo ? 0 : 1)
+            .padding(.trailing, 30)
+            .padding(.bottom, 2 + GlassTabBar.height + 30)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 
     private func pageView<V: View>(_ t: AppTab, _ size: CGSize, @ViewBuilder _ content: () -> V) -> some View {
@@ -160,21 +226,26 @@ final class BackgroundTaskBox: @unchecked Sendable {
 /// Тема для всего окна: 0 — как в системе, 1 — светлая, 2 — тёмная.
 @MainActor
 func applyTheme(_ t: Int) {
-    let style: UIUserInterfaceStyle = t == 1 ? .light : (t == 2 ? .dark : .unspecified)
+    // Лаванда всегда светлая, OLED и Матрица — тёмные, остальные — как выбрано: авто, светлая, тёмная
+    let forced = Theme.current.scheme
+    let style: UIUserInterfaceStyle = forced == .light ? .light : forced == .dark ? .dark
+        : (t == 1 ? .light : (t == 2 ? .dark : .unspecified))
     for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
         for w in scene.windows { w.overrideUserInterfaceStyle = style }
     }
 }
 
 // ── фирменные цвета ─────────────────────────────────────────────────────────
+/// Цвета выбранной темы (Themes.swift). Экран перерисовывается при смене темы: RootView пересоздаёт страницы.
 enum Brand {
-    // палитра «Индиго» (5.3): индиго и розовый акцент
-    static let blue = Color(red: 79 / 255, green: 70 / 255, blue: 229 / 255)
-    static let sky = Color(red: 129 / 255, green: 140 / 255, blue: 248 / 255)
-    static let sun = Color(red: 244 / 255, green: 114 / 255, blue: 182 / 255)
-    static let gold = Color(red: 219 / 255, green: 39 / 255, blue: 119 / 255)  // розовый, читаемый на светлом
-    static let ink = Color(red: 0.25, green: 0.04, blue: 0.16)                // тёмный текст и значки на розовом
-    static let gradient = LinearGradient(colors: [sky, blue], startPoint: .topLeading, endPoint: .bottomTrailing)
+    static var blue: Color { Theme.current.blue }
+    static var sky: Color { Theme.current.sky }
+    static var sun: Color { Theme.current.sun }
+    static var gold: Color { Theme.current.gold }         // второй цвет, читаемый на светлом
+    static var ink: Color { Theme.current.ink }           // тёмный текст и значки на sun
+    static var gradient: LinearGradient {
+        LinearGradient(colors: [sky, blue], startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
 }
 
 // ── настройки ───────────────────────────────────────────────────────────────
@@ -201,6 +272,8 @@ struct SettingsView: View {
     @AppStorage(AppLock.key) private var lockOn = false
     @AppStorage(AppLock.mailKey) private var recoveryMail = ""
     @AppStorage(AppLock.graceKey) private var grace = 300
+    @AppStorage(Theme.key) private var palette = Theme.defaultID
+    @AppStorage(Motion.key) private var lessMotion = false
     @State private var lockSetupOpen = false
     @State private var pinChangeOpen = false
     @State private var recoveryOpen = false
@@ -224,16 +297,53 @@ struct SettingsView: View {
                         Text("Учёт техники · отчёт · картриджи").font(.caption).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                    // пасхалка: пять касаний по логотипу открывают секретную тему «Матрица»
+                    .onTapGesture(count: 5) {
+                        UserDefaults.standard.set(true, forKey: Theme.matrixKey)
+                        Theme.choose("matrix", from: nil)
+                    }
                     .listRowBackground(Color.clear)
                 }
                 Section {
+                    // цвет темы: новая расходится кругом от пальца
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 12) {
+                            ForEach(Theme.choices) { p in
+                                VStack(spacing: 4) {
+                                    Circle()
+                                        .fill(LinearGradient(colors: [p.sky, p.blue], startPoint: .topLeading,
+                                                             endPoint: .bottomTrailing))
+                                        .frame(width: 38, height: 38)
+                                        .overlay(Circle().stroke(.primary, lineWidth: palette == p.id ? 2.5 : 0).padding(-4))
+                                        .padding(4)
+                                    Text(p.name).font(.caption2).foregroundStyle(palette == p.id ? .primary : .secondary)
+                                }
+                                .onTapGesture(coordinateSpace: .global) { Theme.choose(p.id, from: $0) }
+                                .accessibilityElement()
+                                .accessibilityLabel("Тема «\(p.name)»")
+                                .accessibilityAddTraits(palette == p.id ? [.isButton, .isSelected] : .isButton)
+                                .accessibilityAction { Theme.choose(p.id, from: nil) }
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                    .scrollIndicators(.hidden)
                     Picker("Тема", selection: $theme) {
                         Text("Авто").tag(0)
                         Text("Светлая").tag(1)
                         Text("Тёмная").tag(2)
                     }
                     .pickerStyle(.segmented)
-                } header: { Text("Оформление") }
+                    .disabled(Theme.current.scheme != nil)
+                    Toggle(isOn: $lessMotion) { Label("Меньше анимаций", systemImage: "figure.walk.motion") }
+                } header: { Text("Оформление") } footer: {
+                    if let forced = Theme.current.scheme {
+                        Text("Тема «\(Theme.current.name)» всегда \(forced == .light ? "светлая" : "тёмная").")
+                    } else {
+                        Text("Талисман и меню из блокнота тоже меняют тему: значок палитры.")
+                    }
+                }
                 Section {
                     Button { templatesOpen = true } label: {
                         LabeledContent {
@@ -443,7 +553,7 @@ struct SettingsView: View {
                 }
             }
             .scrollContentBackground(.hidden)
-            .clearsBar()
+            .clearsBar(add: true)
             .keyboardDone()
             .navigationTitle("Настройки")
             .onAppear {
@@ -789,43 +899,6 @@ extension View {
     }
 }
 
-/// Круглая кнопка «+» над нижней панелью; на страницах без «+» сжимается и гаснет.
-/// Стекло без .interactive(): вне ленты страниц интерактивное стекло забирало касание, и кнопка молчала.
-struct AddButton: View {
-    let shown: Bool
-    let action: () -> Void
-    @State private var taps = 0
-
-    var body: some View {
-        Button(action: press) {
-            Image(systemName: "plus")
-                .font(.title2.weight(.bold))
-                .foregroundStyle(.white)
-                .symbolEffect(.bounce, value: taps)
-                .frame(width: 58, height: 58)
-                .glassEffect(.regular.tint(Brand.blue), in: Circle())
-                .contentShape(Circle())
-        }
-        .buttonStyle(PressStyle())
-        .sensoryFeedback(.impact(weight: .light), trigger: taps)
-        .scaleEffect(shown ? 1 : 0.2)
-        .opacity(shown ? 1 : 0)
-        .animation(.spring(response: 0.45, dampingFraction: 0.65), value: shown)
-        .allowsHitTesting(shown)
-        // для VoiceOver — вся круглая кнопка, а не значок внутри
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Добавить")
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction { press() }
-        .accessibilityHidden(!shown)
-    }
-
-    private func press() {
-        taps += 1
-        action()
-    }
-}
-
 struct PressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -860,7 +933,7 @@ struct StatCard: View {
 /// не помещается и обрезается — пишем свою, короткую.
 struct NothingFound: View {
     var body: some View {
-        ContentUnavailableView("Ничего не найдено", systemImage: "magnifyingglass",
+        EmptyState("Ничего не найдено", systemImage: "magnifyingglass",
                                description: Text("Проверьте написание или измените запрос."))
     }
 }

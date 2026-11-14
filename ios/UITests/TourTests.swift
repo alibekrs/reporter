@@ -36,7 +36,7 @@ final class Tour {
     private static let typedKey = "abcd efgh jklm"         // как набрал бы человек: строчными, с пробелами
     private static let firstPIN = "1234"
     private static let pin = "2580"                         // после «Забыли PIN-код?»
-    private static let withAdd: Set = ["Учёт", "Отчёт", "Картриджи"]
+    private static let withAdd: Set = ["Главная", "Учёт", "Отчёт", "Картриджи", "Настройки"]   // талисман — везде
 
     init(_ test: XCTestCase, _ name: String) {
         self.test = test
@@ -51,7 +51,7 @@ final class Tour {
         pause(1.5)
         shot("home")
         checkBar()
-        checkNoAdd("Главная")
+        checkAdd("Главная")
         assets()
         report()
         carts()
@@ -65,6 +65,7 @@ final class Tour {
 
     /// Нововведения 5.0. Идут последними: если шаг сорвётся, остальной проход уже снят.
     private func extras() {
+        mascot()
         keepsTyped()
         search()
         undo()
@@ -1171,7 +1172,7 @@ final class Tour {
         XCTAssertTrue(typing.waitForExistence(timeout: 3), "«Найти» не открыла поиск с клавиатурой")
         // панель и «+» уходят за клавиатуру, а не висят над ней
         XCTAssertFalse(tab("Главная").isHittable, "нижняя панель вылезла над клавиатурой")
-        XCTAssertNil(visible(app.buttons.matching(NSPredicate(format: "label == %@", "Добавить"))),
+        XCTAssertNil(visible(app.buttons.matching(NSPredicate(format: "label == %@", "Быстрые действия"))),
                      "«+» вылезла над клавиатурой")
         shot("quick-search")
         closeSearch()
@@ -1198,7 +1199,7 @@ final class Tour {
 
     private func settings() {
         open("Настройки")
-        checkNoAdd("Настройки")
+        checkAdd("Настройки")
         shot("settings")
         for i in 2...6 {
             drag(fromY: 0.75, toY: 0.25)
@@ -1240,7 +1241,7 @@ final class Tour {
             return
         }
         XCTAssertTrue(bottom.label.contains("Тестов 12"), "Учёт: внизу не последний сотрудник: \(bottom.label)")
-        if let add = visible(app.buttons.matching(NSPredicate(format: "label == %@", "Добавить"))) {
+        if let add = visible(app.buttons.matching(NSPredicate(format: "label == %@", "Быстрые действия"))) {
             XCTAssertLessThanOrEqual(bottom.frame.maxY, add.frame.minY,
                                      "Учёт: последняя строка уходит под «+»: \(bottom.frame), «+» \(add.frame)")
         } else {
@@ -1294,7 +1295,7 @@ final class Tour {
     /// «+» видна целиком, стоит выше панели и нажимается.
     @discardableResult
     private func checkAdd(_ page: String) -> XCUIElement? {
-        guard let add = visible(app.buttons.matching(NSPredicate(format: "label == %@", "Добавить"))) else {
+        guard let add = visible(app.buttons.matching(NSPredicate(format: "label == %@", "Быстрые действия"))) else {
             XCTFail("\(page): кнопки «+» нет на экране или она не нажимается")
             return nil
         }
@@ -1306,20 +1307,81 @@ final class Tour {
     }
 
     private func checkNoAdd(_ page: String) {
-        XCTAssertNil(visible(app.buttons.matching(NSPredicate(format: "label == %@", "Добавить"))),
+        XCTAssertNil(visible(app.buttons.matching(NSPredicate(format: "label == %@", "Быстрые действия"))),
                      "\(page): здесь не должно быть «+»")
     }
 
-    /// Нажать «+» и дождаться формы. Не открылась — для разбора пробуем верхний край кнопки.
+    /// Талисман: нажать, в блокноте — значок нужной формы, дождаться формы.
     private func tapAdd(_ add: XCUIElement, opens title: String, _ page: String) -> Bool {
+        let item = ["Выдача": "Выдать картридж"][title] ?? title          // значок называется как форма
         add.tap()
+        let q = app.buttons.matching(NSPredicate(format: "label == %@", item))
+        var button: XCUIElement?
+        for _ in 0..<8 where button == nil {
+            pause(0.4)
+            button = visible(q)
+        }
+        guard let button else {
+            XCTFail("\(page): в меню талисмана нет «\(item)»")
+            shot(page + "-menu-fail")
+            return false
+        }
+        button.tap()
         if app.navigationBars[title].waitForExistence(timeout: 4) { return true }
-        XCTFail("\(page): «+» не открыла «\(title)», кнопка \(add.frame)")
+        XCTFail("\(page): «\(item)» не открыла «\(title)»")
         shot(page + "-add-fail")
-        add.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap()
-        let upper = app.navigationBars[title].waitForExistence(timeout: 3)
-        print("РАЗБОР \(page): нажатие у верхнего края «+» — \(upper ? "сработало" : "тоже нет")")
-        return upper
+        return false
+    }
+
+    /// Талисман: меню из блокнота (подписи при первом открытии), лоток тем, смена темы, бэкап из меню.
+    private func mascot() {
+        tidy()
+        open("Главная")
+        guard let bot = checkAdd("Главная, талисман") else { return }
+        bot.tap()
+        let entry = app.buttons.matching(NSPredicate(format: "label == %@", "Новая запись"))
+        XCTAssertTrue(entry.firstMatch.waitForExistence(timeout: 3), "Талисман: меню не открылось")
+        pause(0.8)
+        shot("mascot-menu")
+        guard let theme = visible(app.buttons.matching(NSPredicate(format: "label == %@", "Сменить тему"))) else {
+            XCTFail("Талисман: нет значка «Сменить тему»")
+            return
+        }
+        theme.tap()
+        pause(0.8)
+        shot("mascot-themes")
+        guard let emerald = visible(app.buttons.matching(NSPredicate(format: "label == %@", "Тема «Изумруд»"))) else {
+            XCTFail("Талисман: в лотке нет темы «Изумруд»")
+            return
+        }
+        emerald.tap()
+        pause(2)
+        shot("theme-emerald")
+        open("Учёт")
+        shot("theme-emerald-assets")
+        // назад к индиго — через тот же лоток
+        open("Главная")
+        if let b = checkAdd("Главная после темы") {
+            b.tap()
+            pause(0.6)
+            visible(app.buttons.matching(NSPredicate(format: "label == %@", "Сменить тему")))?.tap()
+            pause(0.6)
+            visible(app.buttons.matching(NSPredicate(format: "label == %@", "Тема «Индиго»")))?.tap()
+            pause(1.5)
+        }
+        // бэкап из меню: бот не настроен — понятное сообщение
+        if let b = checkAdd("Главная, бэкап") {
+            b.tap()
+            pause(0.6)
+            visible(app.buttons.matching(NSPredicate(format: "label == %@", "Отправить бэкап")))?.tap()
+            let alert = app.alerts.firstMatch
+            if alert.waitForExistence(timeout: 6) {
+                shot("mascot-backup")
+                alert.buttons.firstMatch.tap()
+            } else {
+                shot("mascot-backup-sent")
+            }
+        }
     }
 
     /// Первый элемент, который на этом экране и нажимается (остальные страницы живут рядом за краем).

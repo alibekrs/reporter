@@ -15,7 +15,7 @@ struct TrashView: View {
         let items = store.state.trash.sorted { $0.deleted > $1.deleted }
         List {
             if items.isEmpty {
-                ContentUnavailableView("Корзина пуста", systemImage: "trash",
+                EmptyState("Корзина пуста", systemImage: "trash",
                                        description: Text("Удалённое хранится здесь 30 дней — его можно вернуть."))
             }
             ForEach(items) { t in

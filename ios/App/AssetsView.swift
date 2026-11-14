@@ -114,8 +114,8 @@ struct AssetsView: View {
             }
             if all.isEmpty && fired.isEmpty {
                 if query.isEmpty {
-                    ContentUnavailableView("Учёт пуст", systemImage: "person.crop.rectangle.stack",
-                                           description: Text("Добавьте первого сотрудника кнопкой «+»."))
+                    EmptyState("Учёт пуст", systemImage: "person.crop.rectangle.stack",
+                                           description: Text("Нажмите на робота внизу справа — «Новый сотрудник»."))
                 } else {
                     NothingFound()
                 }

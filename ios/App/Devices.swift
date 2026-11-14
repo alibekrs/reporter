@@ -84,7 +84,7 @@ struct DeviceSheet: View {
                 if let d = store.device(deviceId) {
                     content(d)
                 } else {
-                    ContentUnavailableView("Устройства больше нет", systemImage: "questionmark.square.dashed",
+                    EmptyState("Устройства больше нет", systemImage: "questionmark.square.dashed",
                                            description: Text("Его убрали из учёта — оно в корзине 30 дней."))
                 }
             }
@@ -259,7 +259,7 @@ struct StoreroomView: View {
                 }
             }
             if devs.isEmpty {
-                ContentUnavailableView("Склад пуст", systemImage: "shippingbox",
+                EmptyState("Склад пуст", systemImage: "shippingbox",
                                        description: Text("Сюда попадает сданная техника: «Передать» → «На склад»."))
             }
         }

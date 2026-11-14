@@ -52,7 +52,7 @@ struct SummaryView: View {
                 top("Картриджи по отделам", s.byUnit, suffix: " шт.")
                 top("Картриджи по моделям", s.byModel, suffix: " шт.")
                 if s.entries == 0, s.carts == 0 {
-                    ContentUnavailableView("За этот период пусто", systemImage: "chart.bar.xaxis",
+                    EmptyState("За этот период пусто", systemImage: "chart.bar.xaxis",
                                            description: Text("Нет ни заявок, ни выдач картриджей."))
                 }
                 fleet

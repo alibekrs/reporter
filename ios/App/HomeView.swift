@@ -25,7 +25,11 @@ struct HomeView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    Text(today).font(.subheadline).foregroundStyle(.secondary).rise(shown, 0)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(today).font(.subheadline).foregroundStyle(.secondary)
+                        Text(greeting).font(.headline)
+                    }
+                    .rise(shown, 0)
                     birthdays.rise(shown, 0.03)
                     quoteCard.rise(shown, 0.05)
                     weekCard.rise(shown, 0.12)
@@ -36,7 +40,7 @@ struct HomeView: View {
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
             }
-            .clearsBar()
+            .clearsBar(add: true)          // талисман стоит и на главной
             .navigationTitle("ITdesk")
             .sheet(isPresented: $summaryOpen) { SummaryView().presentationCornerRadius(24) }
         }
@@ -94,6 +98,21 @@ struct HomeView: View {
         grow = true
     }
 
+    /// «Доброе утро, Иван»: имя — из «Ответственный» в почте для отчёта (Фамилия Имя — берём имя).
+    private var greeting: String {
+        let h = Calendar.current.component(.hour, from: Date())
+        let hello = h < 5 ? "Доброй ночи" : h < 12 ? "Доброе утро" : h < 18 ? "Добрый день" : h < 23 ? "Добрый вечер" : "Доброй ночи"
+        let fio = (UserDefaults.standard.string(forKey: "mail.responsible") ?? "").split(separator: " ")
+        let name = fio.count > 1 ? fio[1] : fio.first
+        return name.map { "\(hello), \($0)" } ?? hello
+    }
+
+    /// После 20:00 вместо мысли дня — пожелание отдохнуть (талисман в это время тоже спит).
+    private var evening: Bool {
+        let h = Calendar.current.component(.hour, from: Date())
+        return h >= 20 || h < 6
+    }
+
     private var today: String {
         let s = Dates.human.string(from: Date())
         return s.prefix(1).uppercased() + s.dropFirst()
@@ -101,7 +120,8 @@ struct HomeView: View {
 
     // ── цитата дня ──────────────────────────────────────────────────────────
     private var quoteCard: some View {
-        let q = Quotes.all[quote % Quotes.all.count]
+        let q = evening ? Quote(text: "Рабочий день окончен — отдыхай 🌙", who: "ITdesk", about: "до завтра")
+            : Quotes.all[quote % Quotes.all.count]
         return Button {
             withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) { quote += 1 }
         } label: {

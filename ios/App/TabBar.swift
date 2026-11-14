@@ -22,16 +22,6 @@ enum AppTab: Int, CaseIterable, Hashable {
         case .settings: "gear.circle.fill"
         }
     }
-
-    /// Что делает «+» на этой странице; nil — кнопки нет.
-    var add: QuickAction? {
-        switch self {
-        case .assets: .newEmployee
-        case .report: .newEntry
-        case .carts: .newCart
-        case .home, .settings: nil
-        }
-    }
 }
 
 /// Нижняя панель из жидкого стекла, как в Telegram: нажал — линза под пальцем,
@@ -39,6 +29,7 @@ enum AppTab: Int, CaseIterable, Hashable {
 /// Без пальца линза едет за прокруткой страниц кадр в кадр.
 struct GlassTabBar: View {
     static let height: CGFloat = 54
+    @AppStorage(Theme.key) private var palette = Theme.defaultID       // смена темы перекрашивает панель
 
     let selection: AppTab
     /// 0…4 — где сейчас прокрутка страниц
@@ -119,6 +110,7 @@ struct GlassTabBar: View {
 
 /// Иконка вкладки: у каждой своя анимация при нажатии, как в Telegram.
 private struct TabIcon: View {
+    @AppStorage(Theme.key) private var palette = Theme.defaultID
     let tab: AppTab
     let active: Bool
     let trigger: Int
@@ -149,29 +141,40 @@ private struct TabIcon: View {
     }
 }
 
-/// Фон под стеклом: фирменные цвета. Неподвижный: живой фон перерисовывался 20 раз в секунду под всеми
+/// Фон под стеклом — в цветах темы. Неподвижный: живой фон перерисовывался 20 раз в секунду под всеми
 /// страницами сразу, и стекло над ним каждый кадр размывалось заново — приложение подвисало.
 struct AppBackground: View {
     @Environment(\.colorScheme) private var scheme
+    @AppStorage(Theme.key) private var palette = Theme.defaultID       // смена темы перерисовывает фон
 
     var body: some View {
+        let p = Theme.current
         MeshGradient(width: 3, height: 3, points: [
             SIMD2<Float>(0, 0), SIMD2<Float>(0.5, 0), SIMD2<Float>(1, 0),
             SIMD2<Float>(0, 0.55), SIMD2<Float>(0.55, 0.45), SIMD2<Float>(1, 0.5),
             SIMD2<Float>(0, 1), SIMD2<Float>(0.5, 1), SIMD2<Float>(1, 1),
-        ], colors: scheme == .dark ? AppBackground.dark : AppBackground.light)
+        ], colors: p.mesh(dark: scheme == .dark))
+        .overlay { if p.mono { MatrixCode() } }
         .ignoresSafeArea()
     }
+}
 
-    private static let light: [Color] = [
-        Color(red: 0.90, green: 0.90, blue: 1.0), Color(red: 0.97, green: 0.97, blue: 1.0), Color(red: 1.0, green: 0.91, blue: 0.95),
-        Color(red: 0.86, green: 0.87, blue: 1.0), Color(red: 0.95, green: 0.95, blue: 1.0), Color(red: 0.99, green: 0.90, blue: 0.94),
-        Color(red: 0.88, green: 0.88, blue: 1.0), Color(red: 0.94, green: 0.94, blue: 1.0), Color(red: 0.90, green: 0.90, blue: 1.0),
-    ]
+/// «Матрица»: столбцы зелёных знаков. Нарисованы один раз и не бегут — без нагрузки.
+private struct MatrixCode: View {
+    private static let text: String = {
+        let glyphs = Array("01アイウエオカキクケコ7F3C9$#")
+        return (0..<70).map { i in (0..<28).map { j in String(glyphs[(i * 7 + j * 13) % glyphs.count]) }.joined(separator: " ") }
+            .joined(separator: "\n")
+    }()
 
-    private static let dark: [Color] = [
-        Color(red: 0.09, green: 0.07, blue: 0.28), Color(red: 0.02, green: 0.02, blue: 0.06), Color(red: 0.22, green: 0.06, blue: 0.15),
-        Color(red: 0.13, green: 0.10, blue: 0.40), Color(red: 0.03, green: 0.03, blue: 0.08), Color(red: 0.14, green: 0.04, blue: 0.10),
-        Color(red: 0.16, green: 0.17, blue: 0.42), Color(red: 0.03, green: 0.03, blue: 0.08), Color(red: 0.09, green: 0.07, blue: 0.28),
-    ]
+    var body: some View {
+        Text(Self.text)
+            .font(.system(size: 13, design: .monospaced))
+            .foregroundStyle(Color(hex: 0x22C55E).opacity(0.18))
+            .lineSpacing(2)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .clipped()
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
 }
