@@ -30,6 +30,7 @@ struct RootView: View {
     @State private var plane = false                // самолётик бэкапа на экране
     @State private var planeGo = false              // и улетает
     @State private var note: String?                // плашка сверху
+    @AppStorage("font.size") private var fontSize = 0       // 0 — как в системе
     @State private var failure: String?
 
     var body: some View {
@@ -91,6 +92,15 @@ struct RootView: View {
         }
         .toast($note)
         .fontDesign(Theme.current.mono ? .monospaced : nil)
+        .dynamicTypeSize(RootView.typeSizes(fontSize))
+        // поиск и проверка данных открывают карточку или запись — переходим на их вкладку
+        .onChange(of: store.action) { _, a in
+            switch a {
+            case .openEmployee: go(.assets)
+            case .openEntry: go(.report)
+            default: break
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
             withAnimation(.easeOut(duration: 0.15)) { keyboard = true }
         }
@@ -159,6 +169,13 @@ struct RootView: View {
 
     /// На экране «Учёт» с открытой карточкой сотрудника. Другие страницы при этом листаются как обычно.
     private var cardOpen: Bool { store.lockPaging && tab == .assets }
+
+    /// Размер текста внутри приложения: 0 — как в системе, дальше — мелкий, обычный, крупный, очень крупный.
+    static func typeSizes(_ level: Int) -> ClosedRange<DynamicTypeSize> {
+        let fixed: [DynamicTypeSize] = [.small, .large, .xLarge, .xxLarge]
+        guard (1...4).contains(level) else { return .xSmall ... .accessibility5 }
+        return fixed[level - 1] ... fixed[level - 1]
+    }
 
     /// Кнопка из блокнота талисмана.
     private func act(_ item: MascotItem) {
@@ -263,6 +280,15 @@ struct SettingsView: View {
     @State private var unitsOpen = false
     @State private var trashOpen = false
     @State private var checklistOpen = false
+    @State private var profileOpen = false
+    @State private var positionsOpen = false
+    @State private var importOpen = false
+    @State private var auditOpen = false
+    @AppStorage("font.size") private var fontSize = 0
+    @AppStorage(Feel.hapticsKey) private var haptics = true
+    @AppStorage(Feel.soundsKey) private var sounds = true
+    @AppStorage(Weather.cityKey) private var city = ""
+    @AppStorage("app.icon") private var appIcon = ""
     @State private var backupPassword = ""
     @State private var sealed: SealedFile?
     @State private var filePassword = ""
@@ -304,6 +330,10 @@ struct SettingsView: View {
                         Theme.choose("matrix", from: nil)
                     }
                     .listRowBackground(Color.clear)
+                    Button { profileOpen = true } label: {
+                        Label("Профиль и достижения", systemImage: "person.crop.circle.badge.checkmark")
+                    }
+                    .tint(.primary)
                 }
                 Section {
                     // цвет темы: новая расходится кругом от пальца
@@ -337,6 +367,22 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                     .disabled(Theme.current.scheme != nil)
                     Toggle(isOn: $lessMotion) { Label("Меньше анимаций", systemImage: "figure.walk.motion") }
+                    Toggle(isOn: $haptics) { Label("Отклик", systemImage: "hand.tap") }
+                    Toggle(isOn: $sounds) { Label("Звуки", systemImage: "speaker.wave.2") }
+                    Picker(selection: $fontSize) {
+                        Text("Как в iPhone").tag(0)
+                        Text("Мелкий").tag(1)
+                        Text("Обычный").tag(2)
+                        Text("Крупный").tag(3)
+                        Text("Очень крупный").tag(4)
+                    } label: { Label("Размер текста", systemImage: "textformat.size") }
+                    Picker(selection: Binding(get: { appIcon }, set: { setIcon($0) })) {
+                        Text("Монитор с ключом").tag("")
+                        Text("Индиго").tag("AppIcon-Indigo")
+                        Text("Тёмный").tag("AppIcon-Dark")
+                        Text("Робот").tag("AppIcon-Robot")
+                    } label: { Label("Значок приложения", systemImage: "app.badge") }
+                    LabeledField("Город для погоды", text: $city)
                 } header: { Text("Оформление") } footer: {
                     if let forced = Theme.current.scheme {
                         Text("Тема «\(Theme.current.name)» всегда \(forced == .light ? "светлая" : "тёмная").")
@@ -422,6 +468,18 @@ struct SettingsView: View {
                         }
                     }
                     .tint(.primary)
+                    Button { positionsOpen = true } label: {
+                        LabeledContent {
+                            Text("\(store.positions.count)").monospacedDigit()
+                        } label: {
+                            Label("Должности", systemImage: "person.text.rectangle")
+                        }
+                    }
+                    .tint(.primary)
+                    Button { importOpen = true } label: { Label("Импорт сотрудников из Excel", systemImage: "tablecells") }
+                        .tint(.primary)
+                    Button { auditOpen = true } label: { Label("Проверка данных", systemImage: "checklist") }
+                        .tint(.primary)
                     Button { trashOpen = true } label: {
                         LabeledContent {
                             Text("\(store.state.trash.count)").monospacedDigit()
@@ -584,7 +642,7 @@ struct SettingsView: View {
             .animation(.snappy, value: mail.missing)
             .animation(.snappy, value: store.backupStatus)
             .animation(.snappy, value: store.state.backupEncrypt)
-            .sensoryFeedback(.success, trigger: store.state.lastBackup)
+            .feel(.success, trigger: store.state.lastBackup)
             // .data — и зашифрованный бэкап .reporter, и JSON
             .fileImporter(isPresented: $importing, allowedContentTypes: [.json, .data]) { result in
                 switch result {
@@ -696,6 +754,22 @@ struct SettingsView: View {
                 }
                 .presentationCornerRadius(24)
             }
+            .sheet(isPresented: $profileOpen) { ProfileView().presentationCornerRadius(24) }
+            .sheet(isPresented: $positionsOpen) {
+                NavigationStack {
+                    PositionsView()
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { positionsOpen = false } }
+                        }
+                }
+                .presentationCornerRadius(24)
+            }
+            .sheet(isPresented: $importOpen) { ImportView().presentationCornerRadius(24) }
+            .sheet(isPresented: $auditOpen) { AuditView(tab: .constant(.settings)).presentationCornerRadius(24) }
+            .task(id: city) {
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                await Weather.shared.load()      // город сменили — загрузится заново
+            }
             .sheet(isPresented: $unitsOpen) {
                 NavigationStack {
                     UnitsView()
@@ -718,6 +792,15 @@ struct SettingsView: View {
                 error = "Уведомления для ITdesk запрещены. Разрешите их в настройках iPhone: «Уведомления» → ITdesk."
             }
             Reminder.refresh()
+        }
+    }
+
+    /// Другой значок приложения; iOS сама покажет, что значок сменился.
+    private func setIcon(_ name: String) {
+        UIApplication.shared.setAlternateIconName(name.isEmpty ? nil : name) { e in
+            Task { @MainActor in
+                if let e { error = "Значок не сменился: " + e.localizedDescription } else { appIcon = name }
+            }
         }
     }
 
@@ -802,7 +885,7 @@ struct RestoreSheet: View {
             }
         }
         .padding(20)
-        .sensoryFeedback(.success, trigger: done)
+        .feel(.success, trigger: done)
     }
 }
 
@@ -814,7 +897,7 @@ struct ErrorBanner: ViewModifier {
         content.alert("Не получилось", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(error ?? "") }
-        .sensoryFeedback(.error, trigger: error) { _, new in new != nil }
+        .feel(.error, trigger: error) { _, new in new != nil }
     }
 }
 
@@ -834,8 +917,9 @@ struct Toast: ViewModifier {
                 if let text {
                     let undoable = undo != nil && text == Toast.deleted
                     HStack(spacing: 12) {
-                        Label(text, systemImage: "checkmark.circle.fill")
+                        Label(text, systemImage: text == Toast.deleted ? "trash.fill" : "checkmark.circle.fill")
                             .symbolRenderingMode(.multicolor)
+                            .symbolEffect(.bounce, value: text)
                         if undoable {
                             // жёлтая кнопка: синий текст на синей карточке недели не читался
                             Button { undo?() } label: {
@@ -865,7 +949,7 @@ struct Toast: ViewModifier {
                 }
             }
             .animation(.spring(response: 0.4, dampingFraction: 0.75), value: text)
-            .sensoryFeedback(.success, trigger: text) { _, new in new != nil }
+            .feel(.success, trigger: text) { _, new in new != nil }
     }
 }
 
@@ -913,6 +997,7 @@ struct StatCard: View {
     let value: Int
     let icon: String
     let color: Color
+    @State private var bump = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -921,6 +1006,15 @@ struct StatCard: View {
             Text("\(value)")
                 .font(.title2.bold().monospacedDigit())
                 .contentTransition(.numericText(value: Double(value)))
+                .scaleEffect(bump ? 1.18 : 1, anchor: .leading)
+                .onChange(of: value) {
+                    guard !Motion.reduced else { return }
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.5)) { bump = true }
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(220))
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { bump = false }
+                    }
+                }
             Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

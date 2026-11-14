@@ -13,6 +13,17 @@ struct HomeView: View {
     @State private var grow = false
     @State private var quote = Quotes.todayIndex
     @State private var summaryOpen = false
+    @State private var searchOpen = false
+    @State private var auditOpen = false
+    @State private var issues = 0                    // неточности в данных — считаются при открытии главной
+    @State private var bubble: String?               // пузырёк сверху: день рождения, гарантия
+    @AppStorage("bubble.day") private var bubbleDay = ""
+    @State private var pullY: CGFloat = 0            // «потяни вниз»: робот появляется и крутится
+    @State private var armed = false
+    @State private var spin = 0.0
+    @State private var spinning = false
+    @ObservedObject private var weather = Weather.shared
+    @Environment(\.openURL) private var openURL
 
     private static let monthName: DateFormatter = {
         let f = DateFormatter()
@@ -30,19 +41,60 @@ struct HomeView: View {
                         Text(greeting).font(.headline)
                     }
                     .rise(shown, 0)
+                    weatherChip.rise(shown, 0.01)
+                    holiday.rise(shown, 0.02)
                     birthdays.rise(shown, 0.03)
-                    quoteCard.rise(shown, 0.05)
-                    weekCard.rise(shown, 0.12)
+                    congrats.rise(shown, 0.04)
+                    inWorkCard.rise(shown, 0.04)
+                    weekSummary.rise(shown, 0.05)
+                    quoteCard.overlay(alignment: .bottomTrailing) { quoteShare }
+                        .modifier(Parallax(amount: 3)).rise(shown, 0.05)
+                    weekCard.modifier(Parallax(amount: 5)).rise(shown, 0.12)
                     tiles.rise(shown, 0.19)
                     summaryButton.rise(shown, 0.23)
                     actions.rise(shown, 0.28)
+                    auditCard.rise(shown, 0.3)
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
             }
             .clearsBar(add: true)          // талисман стоит и на главной
+            // «потяни вниз»: робот показывается, отпустили — крутится, погода и мысль дня обновляются
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in pulled(y) }
+            .overlay(alignment: .top) {
+                PixelBot(mood: armed ? .happy : .idle)
+                    .frame(width: 46, height: 46)
+                    .rotationEffect(.degrees(spin))
+                    .opacity(spinning ? 1 : Double(min(1, max(0, -pullY / 70))))
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+            .overlay(alignment: .top) { Fall(emoji: fall).frame(height: 420).allowsHitTesting(false) }
+            .overlay(alignment: .topTrailing) {
+                if let bubble {
+                    Text(bubble).font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 14).padding(.vertical, 9)
+                        .glassEffect(.regular, in: Capsule())
+                        .padding(.trailing, 12).padding(.top, 4)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
             .navigationTitle("ITdesk")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { searchOpen = true } label: { Image(systemName: "magnifyingglass") }
+                        .accessibilityLabel("Поиск по всему")
+                }
+            }
             .sheet(isPresented: $summaryOpen) { SummaryView().presentationCornerRadius(24) }
+            .sheet(isPresented: $searchOpen) { GlobalSearchView(tab: $tab).presentationCornerRadius(24) }
+            .sheet(isPresented: $auditOpen) { AuditView(tab: $tab).presentationCornerRadius(24) }
+            .task {
+                await weather.load()
+                issues = store.audit().count
+                await showBubble()
+            }
+            .onChange(of: tab, initial: true) { _, t in if t == .home { Tilt.shared.start() } else { Tilt.shared.stop() } }
         }
         .onAppear { if ready { start() } }
         .onChange(of: ready) { _, r in if r { start() } }
@@ -156,7 +208,7 @@ struct HomeView: View {
             .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
         .buttonStyle(PressStyle())
-        .sensoryFeedback(.selection, trigger: quote)
+        .feel(.selection, trigger: quote)
         .accessibilityHint("Следующая цитата")
     }
 
@@ -179,6 +231,15 @@ struct HomeView: View {
                     .font(.system(size: 40, weight: .heavy, design: .rounded))
                     .contentTransition(.numericText(value: Double(week.count)))
                 Text(plural(week.count, "запись", "записи", "записей")).font(.headline).opacity(0.85)
+                Spacer()
+                let streak = Streak.count
+                if streak >= 2 {
+                    Text("🔥 \(streak) \(plural(streak, "неделя", "недели", "недель")) подряд")
+                        .font(.caption.weight(.bold))
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(.white.opacity(0.2), in: Capsule())
+                        .accessibilityLabel("Отчёт вовремя \(streak) \(plural(streak, "неделю", "недели", "недель")) подряд")
+                }
             }
             HStack(alignment: .bottom, spacing: 8) {
                 ForEach(0..<5, id: \.self) { i in
@@ -317,7 +378,7 @@ private struct QuickButton: View {
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(PressStyle())
-        .sensoryFeedback(.impact(weight: .light), trigger: taps)
+        .feel(.impact(weight: .light), trigger: taps)
     }
 }
 
@@ -328,5 +389,181 @@ private extension View {
             .offset(y: on ? 0 : 22)
             .scaleEffect(on ? 1 : 0.97)
             .animation(.spring(response: 0.6, dampingFraction: 0.8).delay(delay), value: on)
+    }
+}
+
+// ── 5.5: погода, праздник, заявки в работе, итог недели, поздравления, проверка данных ──
+extension HomeView {
+    @ViewBuilder var weatherChip: some View {
+        if let text = weather.text {
+            Label {
+                Text(text).font(.subheadline.weight(.semibold))
+            } icon: {
+                Image(systemName: weather.icon).symbolRenderingMode(.multicolor).symbolEffect(.bounce, value: text)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .glassEffect(.regular, in: Capsule())
+        } else if weather.loading {
+            Text("+00° · погода загружается").font(.subheadline)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .glassEffect(.regular, in: Capsule())
+                .redacted(reason: .placeholder)
+        }
+    }
+
+    @ViewBuilder var holiday: some View {
+        if let h = Holidays.near() {
+            HStack(spacing: 12) {
+                Text(h.emoji).font(.largeTitle)
+                Text(h.text).font(.headline)
+                Spacer(minLength: 0)
+            }
+            .padding(14)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        }
+    }
+
+    /// Сегодняшние именинники: «Поздравить» открывает WhatsApp с готовым текстом (номера нет — «Поделиться»).
+    @ViewBuilder var congrats: some View {
+        let today = store.birthdays(within: 0).filter { $0.days == 0 }
+        if !today.isEmpty {
+            VStack(spacing: 8) {
+                ForEach(today) { b in
+                    let phone = store.employee(b.id)?["phone"]?.string ?? ""
+                    if let url = Congrats.whatsApp(phone, b.fio) {
+                        Button { openURL(url) } label: {
+                            Label("Поздравить: " + Store.short(b.fio), systemImage: "party.popper.fill").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    } else {
+                        ShareLink(item: Congrats.text(b.fio)) {
+                            Label("Поздравить: " + Store.short(b.fio), systemImage: "party.popper.fill").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder var inWorkCard: some View {
+        let list = store.inWork
+        if !list.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("В РАБОТЕ · \(list.count)", systemImage: "hourglass")
+                    .font(.caption2.weight(.bold)).foregroundStyle(.orange)
+                ForEach(list.prefix(3)) { e in
+                    Button {
+                        store.action = .openEntry(e.uid)
+                        tab = .report
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(e.employee ?? "").font(.subheadline.weight(.semibold))
+                            Text(e.description ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .tint(.primary)
+                }
+            }
+            .padding(14)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        }
+    }
+
+    /// Пятница и выходные: итог недели.
+    @ViewBuilder var weekSummary: some View {
+        let wd = Calendar(identifier: .gregorian).component(.weekday, from: Date())
+        if wd == 6 || wd == 7 || wd == 1 {
+            let monday = Dates.monday(Date())
+            let from = Dates.text(monday)
+            let to = Dates.text(Calendar(identifier: .gregorian).date(byAdding: .day, value: 6, to: monday) ?? monday)
+            let entries = store.entries(week: monday).count
+            let carts = store.state.carts.filter { $0.issued_at >= from && $0.issued_at <= to }.reduce(0) { $0 + $1.qty }
+            let broken = store.state.employees.filter { !Store.isDismissed($0) && trouble($0) > 0 }.count
+            HStack(spacing: 12) {
+                Text(broken == 0 ? "🎉" : "📋").font(.largeTitle)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("ИТОГ НЕДЕЛИ").font(.caption2.weight(.bold)).foregroundStyle(Brand.gold)
+                    Text("\(entries) \(plural(entries, "заявка", "заявки", "заявок")), \(carts) \(plural(carts, "картридж", "картриджа", "картриджей")), "
+                         + (broken == 0 ? "без проблем" : "с проблемой: \(broken)"))
+                        .font(.subheadline.weight(.semibold))
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(14)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        }
+    }
+
+    @ViewBuilder var auditCard: some View {
+        if issues > 0 {
+            Button { auditOpen = true } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "checklist.unchecked").font(.headline).foregroundStyle(.orange)
+                    Text("Проверка данных: \(issues) \(plural(issues, "неточность", "неточности", "неточностей"))")
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.footnote.weight(.bold)).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 11)
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            }
+            .buttonStyle(PressStyle())
+        }
+    }
+
+    /// Мысль дня картинкой — в Telegram, WhatsApp, куда угодно.
+    var quoteShare: some View {
+        ShareLink(item: QuoteImage(quote: currentQuote), preview: SharePreview("Мысль дня", image: Image(systemName: "quote.bubble.fill"))) {
+            Image(systemName: "square.and.arrow.up").font(.footnote.weight(.semibold)).padding(12)
+        }
+        .accessibilityLabel("Поделиться мыслью дня")
+    }
+
+    var currentQuote: Quote {
+        evening ? Quote(text: "Рабочий день окончен — отдыхай 🌙", who: "ITdesk", about: "до завтра")
+            : Quotes.all[quote % Quotes.all.count]
+    }
+
+    /// День рождения сегодня — шарики; Наурыз — тюльпаны; иначе — по сезону.
+    var fall: [String] {
+        store.birthdays(within: 0).contains { $0.days == 0 } ? ["🎈", "🎉"] : Fall.season
+    }
+
+    func pulled(_ y: CGFloat) {
+        pullY = y
+        if y < -80 && !armed {
+            armed = true
+        } else if y > -10 && armed {
+            armed = false
+            spinning = true
+            withAnimation(.easeInOut(duration: 0.8)) { spin += 360 }
+            Task {
+                try? await Task.sleep(for: .seconds(0.9))
+                spinning = false
+            }
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) { quote += 1 }
+            Task { await weather.load(force: true) }
+        }
+    }
+
+    /// Раз в день пузырёк: сегодня день рождения или скоро кончается гарантия.
+    func showBubble() async {
+        let today = Dates.text(Date())
+        guard bubbleDay != today else { return }
+        var text: String?
+        if let b = store.birthdays(within: 0).first(where: { $0.days == 0 }) {
+            text = "🎂 Сегодня день рождения: " + Store.short(b.fio)
+        } else {
+            let soon = store.allDevices.filter { (0...30).contains(Store.warrantyDays($0.item, today: store.today) ?? -1) }.count
+            if soon > 0 { text = "🛡 Гарантия кончается: \(soon) \(plural(soon, "устройство", "устройства", "устройств"))" }
+        }
+        guard let text else { return }
+        bubbleDay = today
+        try? await Task.sleep(for: .seconds(1.2))
+        withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) { bubble = text }
+        try? await Task.sleep(for: .seconds(4))
+        withAnimation(.easeOut(duration: 0.3)) { bubble = nil }
     }
 }

@@ -105,7 +105,31 @@ struct Entry: Codable, Identifiable, Hashable {
     var result: String? = ""
     /// id устройства, с которым была заявка: запись попадает в его историю
     var device: String? = nil
+    /// заявка ещё в работе: висит на главной и на значке приложения, пока её не закроют
+    var inWork: Bool? = nil
     var id: String { uid }
+}
+
+/// Должность со своим значком и цветом (Настройки → Должности): аватарка сотрудника в «Учёте».
+struct Position: Codable, Hashable, Identifiable {
+    var id: String
+    var name: String
+    var icon: String
+    var color: UInt32
+
+    /// Стандартный список — пока в настройках ничего не меняли.
+    static let defaults: [Position] = ([
+        ("Директор", "briefcase.fill", 0xF59E0B), ("Заместитель директора", "briefcase", 0xF59E0B),
+        ("Главный бухгалтер", "banknote.fill", 0x10B981), ("Бухгалтер", "banknote", 0x10B981),
+        ("Экономист", "chart.line.uptrend.xyaxis", 0x10B981), ("Системный администратор", "desktopcomputer", 0x3B82F6),
+        ("Программист", "chevron.left.forwardslash.chevron.right", 0x3B82F6), ("Юрист", "building.columns.fill", 0xA855F7),
+        ("Специалист по кадрам", "person.text.rectangle.fill", 0x14B8A6), ("Инженер", "wrench.and.screwdriver.fill", 0xEAB308),
+        ("Секретарь", "envelope.fill", 0xEC4899), ("Водитель", "car.fill", 0x6B7280), ("Охранник", "shield.fill", 0xEF4444),
+        ("Кладовщик", "shippingbox.fill", 0xA16207),
+    ] as [(String, String, UInt32)]).map { Position(id: $0.0, name: $0.0, icon: $0.1, color: $0.2) }
+
+    /// Список из данных (Store держит в актуальном виде): по нему рисуются аватарки.
+    nonisolated(unsafe) static var current: [Position] = defaults
 }
 
 /// Событие в истории устройства: появилось у сотрудника, передано, владелец уволен, вернули из корзины.

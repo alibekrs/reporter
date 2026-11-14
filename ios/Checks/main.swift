@@ -58,6 +58,15 @@ precondition((try? BackupFile.read(Data("{\"x\":1}".utf8))) == nil, "чужой 
 let old = try BackupFile.read(Data("{\"exported_at\":\"1\",\"units\":[],\"employees\":[],\"entries\":[],\"cartridges\":[],\"unsynced\":[]}".utf8))
 precondition(old.meta == nil && old.employees.isEmpty, "старый бэкап не читается")
 precondition(Xlsx.column(0) == "A" && Xlsx.column(25) == "Z" && Xlsx.column(26) == "AA", "буквы колонок")
+// чтение Excel для импорта сотрудников: свой же файл читается обратно, пустые ячейки на месте
+let book = Xlsx.workbook([Xlsx.Sheet(name: "Сотрудники", header: ["ФИО", "Должность", "Телефон"], widths: [30, 20, 15],
+                                     rows: [["Иванов Иван Петрович", "Инженер", "+7 700"], ["Ким Алина", "", "+7 701"]])])
+let read = try Xlsx.read(book)
+precondition(read.count == 3 && read[0] == ["ФИО", "Должность", "Телефон"], "Excel: шапка \(read)")
+precondition(read[1] == ["Иванов Иван Петрович", "Инженер", "+7 700"] && read[2] == ["Ким Алина", "", "+7 701"], "Excel: строки \(read)")
+precondition(Xlsx.index("A1") == 0 && Xlsx.index("AB12") == 27 && Xlsx.index("12") == nil, "Excel: номера столбцов")
+precondition((try? Xlsx.read(Data("не zip".utf8))) == nil, "Excel: мусор принят за файл")
+print("чтение Excel в порядке")
 // ── ключ восстановления: 12 знаков без 0/O и 1/I, набирать можно как угодно ──
 let key = RecoveryKey.make()
 precondition(key.count == 14 && RecoveryKey.looksLike(key) && RecoveryKey.normalize(key).count == 12, "ключ: \(key)")

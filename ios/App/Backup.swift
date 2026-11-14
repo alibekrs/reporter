@@ -1,4 +1,5 @@
 import CommonCrypto
+import Compression
 import CryptoKit
 import Foundation
 import Security
@@ -19,10 +20,13 @@ struct BackupFile: Codable {
     var storeroom: Dict? = nil
     var device_log: [DeviceEvent]? = nil
     var checklist: [String]? = nil
+    /// с 5.5: сеть (пароли — только в связке ключей iPhone, в бэкап не идут) и свои должности
+    var network: [Dict]? = nil
+    var positions: [Position]? = nil
 
     enum CodingKeys: String, CodingKey {
         case note = "описание", app, exported_at, meta, units, employees, entries, cartridges, templates, storeroom,
-             device_log, checklist
+             device_log, checklist, network, positions
     }
 
     static let readme = "Бэкап приложения ITdesk (раньше REPORTER и ITtool). units — подразделения, employees — сотрудники и их техника "
@@ -479,5 +483,134 @@ enum Telegram {
             throw APIError(message: d)
         }
         return j
+    }
+}
+
+// ── чтение Excel (импорт сотрудников) ───────────────────────────────────────
+extension Xlsx {
+    private static let bad = APIError(message: "Это не файл Excel (.xlsx) или он повреждён.")
+
+    /// Первый лист .xlsx — строки ячеек. Zip разбираем сами: Compression умеет «голый» deflate.
+    static func read(_ data: Data) throws -> [[String]] {
+        let files = try unzip(data)
+        let shared = files["xl/sharedStrings.xml"].map { parse($0, SharedStrings()).items } ?? []
+        guard let name = files.keys.filter({ $0.hasPrefix("xl/worksheets/sheet") }).sorted().first, let sheet = files[name] else {
+            throw APIError(message: "В файле нет листа Excel.")
+        }
+        return parse(sheet, Cells(shared)).rows
+    }
+
+    /// «BC12» → 54 (номер столбца с нуля).
+    static func index(_ ref: String) -> Int? {
+        var n = 0, any = false
+        for ch in ref.uppercased() {
+            guard let a = ch.asciiValue, (65...90).contains(a) else { break }
+            n = n * 26 + Int(a - 64)
+            any = true
+        }
+        return any ? n - 1 : nil
+    }
+
+    private static func parse<P: XMLParserDelegate>(_ data: Data, _ delegate: P) -> P {
+        let p = XMLParser(data: data)
+        p.delegate = delegate
+        p.parse()
+        return delegate
+    }
+
+    private static func unzip(_ d: Data) throws -> [String: Data] {
+        let b = [UInt8](d)
+        func u16(_ i: Int) -> Int { Int(b[i]) | Int(b[i + 1]) << 8 }
+        func u32(_ i: Int) -> Int { u16(i) | u16(i + 2) << 16 }
+        guard b.count > 22 else { throw bad }
+        var e = b.count - 22                                   // конец каталога; с комментарием — чуть раньше
+        while e >= 0 && u32(e) != 0x06054b50 { e -= 1 }
+        guard e >= 0 else { throw bad }
+        var p = u32(e + 16)
+        var out: [String: Data] = [:]
+        for _ in 0..<u16(e + 10) {
+            guard p + 46 <= b.count, u32(p) == 0x02014b50 else { throw bad }
+            let method = u16(p + 10), csize = u32(p + 20), usize = u32(p + 24)
+            let nlen = u16(p + 28), skip = u16(p + 30) + u16(p + 32), local = u32(p + 42)
+            guard p + 46 + nlen <= b.count else { throw bad }
+            let name = String(decoding: b[(p + 46)..<(p + 46 + nlen)], as: UTF8.self)
+            p += 46 + nlen + skip
+            guard name.hasPrefix("xl/"), name.hasSuffix(".xml") else { continue }
+            guard local + 30 <= b.count, u32(local) == 0x04034b50 else { throw bad }
+            let start = local + 30 + u16(local + 26) + u16(local + 28)
+            guard start + csize <= b.count else { throw bad }
+            let raw = Data(b[start..<(start + csize)])
+            switch method {
+            case 0: out[name] = raw
+            case 8: out[name] = try inflate(raw, usize)
+            default: throw APIError(message: "Файл Excel сжат неизвестным способом.")
+            }
+        }
+        return out
+    }
+
+    private static func inflate(_ src: Data, _ size: Int) throws -> Data {
+        guard size > 0, size < 200_000_000, !src.isEmpty else { throw bad }    // файл чужой — без огромных размеров
+        var dst = [UInt8](repeating: 0, count: size)
+        let n = src.withUnsafeBytes { s in
+            compression_decode_buffer(&dst, size, s.bindMemory(to: UInt8.self).baseAddress!, src.count, nil, COMPRESSION_ZLIB)
+        }
+        guard n == size else { throw bad }
+        return Data(dst)
+    }
+
+    /// sharedStrings.xml: каждый <si> — одна строка (все <t> внутри склеены).
+    private final class SharedStrings: NSObject, XMLParserDelegate {
+        var items: [String] = []
+        private var cur = "", inT = false
+
+        func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?,
+                    attributes: [String: String] = [:]) {
+            if name == "si" { cur = "" }
+            if name == "t" { inT = true }
+        }
+
+        func parser(_ parser: XMLParser, foundCharacters string: String) { if inT { cur += string } }
+
+        func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
+            if name == "t" { inT = false }
+            if name == "si" { items.append(cur) }
+        }
+    }
+
+    /// Лист: <row><c r="B2" t="s"><v>3</v></c>…; t="s" — номер общей строки, inlineStr — текст в <is><t>.
+    private final class Cells: NSObject, XMLParserDelegate {
+        let shared: [String]
+        var rows: [[String]] = []
+        private var row: [String] = [], col = 0, type = "", text = "", inV = false
+
+        init(_ shared: [String]) { self.shared = shared }
+
+        func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?,
+                    attributes: [String: String] = [:]) {
+            switch name {
+            case "row": row = []
+            case "c":
+                col = Xlsx.index(attributes["r"] ?? "") ?? row.count
+                type = attributes["t"] ?? ""
+                text = ""
+            case "v", "t": inV = true
+            default: break
+            }
+        }
+
+        func parser(_ parser: XMLParser, foundCharacters string: String) { if inV { text += string } }
+
+        func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
+            switch name {
+            case "v", "t": inV = false
+            case "c":
+                let value = type == "s" ? (Int(text).flatMap { $0 >= 0 && $0 < shared.count ? shared[$0] : nil } ?? "") : text
+                while row.count < col { row.append("") }
+                if row.count == col { row.append(value) } else { row[col] = value }
+            case "row": rows.append(row)
+            default: break
+            }
+        }
     }
 }

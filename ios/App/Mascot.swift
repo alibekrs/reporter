@@ -274,7 +274,7 @@ struct MascotMenu: View {
             .animation(.spring(response: 0.45, dampingFraction: 0.65), value: shown)
             .onTapGesture { toggle() }
             .allowsHitTesting(shown)
-            .sensoryFeedback(.impact(weight: .light), trigger: taps)
+            .feel(.impact(weight: .light), trigger: taps)
             .overlay(alignment: .topTrailing) {
                 if !greeted && shown && !open {
                     label("Нажми на меня — быстрые действия").offset(x: -6, y: -40)

@@ -80,13 +80,14 @@ enum Reminder {
 
     /// Спросить разрешение на уведомления. false — пользователь запретил.
     static func allow() async -> Bool {
-        (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])) ?? false
+        (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])) ?? false
     }
 
     /// Отчёт за неделю ушёл начальнику — напоминать о нём не нужно.
     static func sent(_ monday: Date) {
         let d = UserDefaults.standard, week = Dates.text(monday)
         if week > (d.string(forKey: sentKey) ?? "") { d.set(week, forKey: sentKey) }
+        Streak.record(monday)
         refresh()
     }
 

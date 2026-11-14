@@ -153,6 +153,8 @@ final class LockScreen: ObservableObject {
 
     @Published var step = Step.pin
     @Published var message = ""
+    /// PIN-код или Face ID подошли: на миг галочка, потом окно уходит
+    @Published var success = false
     /// Приложение не на экране (переключатель приложений, окно Face ID): только значок и название, без кнопок.
     @Published private(set) var cover = false
     /// С входом приложение стартует закрытым.
@@ -231,7 +233,16 @@ final class LockScreen: ObservableObject {
     private func open() {
         AppLock.clearFails()
         locked = false
-        hide()
+        guard window != nil, !Motion.reduced else {
+            hide()
+            return
+        }
+        success = true
+        Task {
+            try? await Task.sleep(for: .milliseconds(380))
+            hide()
+            success = false
+        }
     }
 
     private func show(_ scene: UIWindowScene? = nil) {
@@ -380,6 +391,8 @@ struct PinPad: View {
     let done: (String) -> Void
 
     @State private var pin = ""
+    @State private var shakes = 0
+    @ObservedObject private var lock = LockScreen.shared        // галочка при входе
     private static let rows = [["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"]]
 
     var body: some View {
@@ -387,12 +400,23 @@ struct PinPad: View {
             Text(title).font(.headline)
             HStack(spacing: 18) {
                 ForEach(0..<AppLock.pinLength, id: \.self) { i in
+                    let dot = message.isEmpty ? Color.primary : Color.red
                     Circle()
-                        .fill(i < pin.count ? Color.primary : Color.clear)
-                        .overlay(Circle().strokeBorder(Color.primary, lineWidth: 1.5))
+                        .fill(i < pin.count ? dot : Color.clear)
+                        .overlay(Circle().strokeBorder(dot, lineWidth: 1.5))
                         .frame(width: 14, height: 14)
                 }
             }
+            .opacity(LockScreen.shared.success ? 0 : 1)
+            .overlay {
+                if LockScreen.shared.success {
+                    Image(systemName: "checkmark.circle.fill").font(.system(size: 34)).foregroundStyle(.green)
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .modifier(Shake(animatableData: CGFloat(shakes)))
+            .onChange(of: message) { _, m in if !m.isEmpty { withAnimation(.default) { shakes += 1 } } }
+            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: LockScreen.shared.success)
             .accessibilityElement()
             .accessibilityLabel("PIN-код")
             .accessibilityValue("\(pin.count) из \(AppLock.pinLength)")
@@ -415,8 +439,8 @@ struct PinPad: View {
                 }
             }
         }
-        .sensoryFeedback(.selection, trigger: pin.count)
-        .sensoryFeedback(.error, trigger: message) { _, new in !new.isEmpty }
+        .feel(.selection, trigger: pin.count)
+        .feel(.error, trigger: message) { _, new in !new.isEmpty }
     }
 
     private func digit(_ d: String) -> some View {

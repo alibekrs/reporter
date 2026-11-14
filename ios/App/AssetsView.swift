@@ -19,6 +19,7 @@ private func deviceCount(_ e: Dict) -> Int {
 struct AssetsView: View {
     /// Строка «Склад» в навигации учёта — не id сотрудника.
     static let storeroomPath = "storeroom"
+    static let networkPath = "network"
 
     @EnvironmentObject private var store: Store
     @State private var query = ""
@@ -26,6 +27,8 @@ struct AssetsView: View {
     @State private var draft: Dict?
     @State private var toast: String?
     @State private var searching = false
+    @State private var favDevice: DeviceRef?
+    @Namespace private var zoom
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -37,13 +40,17 @@ struct AssetsView: View {
             .navigationDestination(for: String.self) { id in
                 if id == AssetsView.storeroomPath {
                     StoreroomView()
+                } else if id == AssetsView.networkPath {
+                    NetworkView()
                 } else if let start = store.employee(id) ?? draft, let meta = store.meta {
                     EmployeeView(initial: start, meta: meta) { toast = $0 }
+                        .navigationTransition(.zoom(sourceID: id, in: zoom))
                 }
             }
             .toast($toast) { if store.undoDelete() { toast = "Возвращено" } }
         }
         .onChange(of: path) { _, p in store.lockPaging = !p.isEmpty }
+        .sheet(item: $favDevice) { d in DeviceSheet(deviceId: d.id).presentationCornerRadius(24) }
         .onChange(of: store.restores) { _, _ in path = [] }     // данные заменили — карточка держала старые
     }
 
@@ -75,10 +82,32 @@ struct AssetsView: View {
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
             }
+            // избранное — сверху: закреплённые сотрудники и устройства
+            let favs = store.favorites, favDevs = store.favoriteDevices
+            if query.isEmpty && !(favs.isEmpty && favDevs.isEmpty) {
+                Section("Избранное") {
+                    ForEach(favs, id: \.["id"]) { e in
+                        NavigationLink(value: e["id"]?.string ?? "") { EmployeeRow(e: e) }
+                    }
+                    ForEach(favDevs) { d in
+                        Button { favDevice = d } label: {
+                            Label {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(store.deviceTitle(d))
+                                    Text(store.holderName(d.holder)).font(.caption).foregroundStyle(.secondary)
+                                }
+                            } icon: { Image(systemName: groupIcons[d.group] ?? "desktopcomputer").foregroundStyle(Brand.blue) }
+                        }
+                        .tint(.primary)
+                    }
+                }
+            }
             ForEach(groups) { g in
                 Section {
                     ForEach(g.emps, id: \.["id"]) { e in
-                        NavigationLink(value: e["id"]?.string ?? "") { EmployeeRow(e: e) }
+                        let id = e["id"]?.string ?? ""
+                        NavigationLink(value: id) { EmployeeRow(e: e) }
+                            .matchedTransitionSource(id: id, in: zoom)
                     }
                 } header: {
                     HStack {
@@ -88,6 +117,20 @@ struct AssetsView: View {
                             .padding(.horizontal, 7).padding(.vertical, 1)
                             .background(Brand.blue.opacity(0.15), in: Capsule())
                     }
+                }
+            }
+            if query.isEmpty {
+                Section {
+                    NavigationLink(value: AssetsView.networkPath) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "network").font(.title3).foregroundStyle(Brand.blue).frame(width: 40, height: 40)
+                            Text("Сеть")
+                            Spacer()
+                            Text("\(store.state.network.count)").monospacedDigit().foregroundStyle(.secondary)
+                        }
+                    }
+                } footer: {
+                    Text("Роутеры, коммутаторы, точки Wi-Fi, серверы, камеры: IP, MAC, логины и пароли.")
                 }
             }
             if stock > 0 && query.isEmpty {
@@ -140,6 +183,9 @@ struct AssetsView: View {
                 let d = store.newEmployee(unitId: store.rootUnit)
                 draft = d
                 path.append(d["id"]?.string ?? "")
+            case .openEmployee(let id):
+                store.action = nil
+                path = [id]
             default:
                 break
             }
@@ -172,7 +218,8 @@ struct Avatar: View {
 
     /// По словам в должности; порядок важен: «главный бухгалтер» — бухгалтер, а не руководитель.
     static func role(_ position: String) -> (icon: String, color: Color) {
-        let p = position.lowercased()
+        let p = position.lowercased().trimmingCharacters(in: .whitespaces)
+        if let own = Position.current.first(where: { $0.name.lowercased() == p }) { return (own.icon, Color(hex: own.color)) }
         let rules: [([String], String, Color)] = [
             (["бухгалт", "кассир", "финанс", "экономист"], "banknote.fill", .green),
             (["админ", "программ", "системн", "айти", "it-", "it ", "1с"], "desktopcomputer", .blue),
@@ -253,6 +300,8 @@ struct EmployeeView: View {
     @State private var confirmDismiss = false
     @State private var opened: DeviceRef?
     @State private var error: String?
+    @State private var appeared = false
+    @State private var shine = false
 
     init(initial: Dict, meta: Meta, onSaved: @escaping (String) -> Void) {
         _emp = State(initialValue: initial)
@@ -268,6 +317,7 @@ struct EmployeeView: View {
             Section {
                 HStack(spacing: 14) {
                     Avatar(name: Store.fio(emp), position: emp["position"]?.string ?? "").scaleEffect(1.4).padding(8)
+                        .symbolEffect(.bounce, value: appeared)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(Store.fio(emp)).font(.headline).contentTransition(.opacity)
                         Text(store.units.first { $0.id == emp["unit_id"]?.string }?.path ?? "")
@@ -278,9 +328,13 @@ struct EmployeeView: View {
                                 .padding(.horizontal, 7).padding(.vertical, 2)
                                 .background(Color.orange.opacity(0.15), in: Capsule())
                         }
+                        filled
                     }
                 }
+                .padding(.vertical, 4)
+                .overlay { HoloSheen().clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous)) }
                 .listRowBackground(Color.clear)
+                .onAppear { appeared = true }
             }
             onboarding
             if !isNew { history }
@@ -288,7 +342,7 @@ struct EmployeeView: View {
                 TextField("Фамилия", text: textBinding($emp, "last_name"))
                 TextField("Имя", text: textBinding($emp, "first_name"))
                 TextField("Отчество", text: textBinding($emp, "middle_name"))
-                TextField("Должность", text: textBinding($emp, "position"))
+                PositionField(text: textBinding($emp, "position"))
                 Picker("Подразделение", selection: textBinding($emp, "unit_id")) {
                     ForEach(store.units) { u in
                         Text(String(repeating: "  ", count: u.depth) + u.name).tag(u.id)
@@ -317,6 +371,7 @@ struct EmployeeView: View {
                     }
                 }
             }
+            trainings
             Section("Место и учётка") {
                 TextField("Здание", text: textBinding($emp, "building"))
                 TextField("Этаж", text: textBinding($emp, "floor"))
@@ -344,6 +399,12 @@ struct EmployeeView: View {
         .navigationTitle(isNew ? "Новый сотрудник" : Store.fio(emp))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if !isNew {
+                let fav = store.employee(id)?["favorite"]?.bool == true
+                Button { store.setFavorite(id, !fav) } label: { Image(systemName: fav ? "star.fill" : "star") }
+                    .symbolEffect(.bounce, value: fav)
+                    .accessibilityLabel(fav ? "Убрать из избранного" : "В избранное")
+            }
             Button {
                 hideKeyboard()                              // сохранили — клавиатура не нужна, панель возвращается
                 let wasNew = isNew
@@ -381,6 +442,61 @@ struct EmployeeView: View {
             DeviceSheet(deviceId: d.id).presentationCornerRadius(24)
         }
         .errorAlert($error)
+    }
+
+    /// Насколько заполнена карточка: полоска; на 100% по ней пробегает блик.
+    @ViewBuilder private var filled: some View {
+        let keys = ["last_name", "first_name", "middle_name", "position", "office", "phone", "email", "birthday"]
+        let done = keys.filter { !(emp[$0]?.string ?? "").trimmingCharacters(in: .whitespaces).isEmpty }.count
+            + (deviceCount(emp) > 0 ? 1 : 0)
+        let part = Double(done) / Double(keys.count + 1)
+        VStack(alignment: .leading, spacing: 3) {
+            ProgressView(value: part)
+                .tint(part >= 1 ? .green : Brand.blue)
+                .overlay {
+                    if part >= 1 {
+                        LinearGradient(colors: [.clear, .white.opacity(0.8), .clear], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: 40)
+                            .offset(x: shine ? 120 : -120)
+                            .onAppear { withAnimation(.easeInOut(duration: 1.2)) { shine = true } }
+                            .allowsHitTesting(false)
+                    }
+                }
+                .clipped()
+            Text(part >= 1 ? "Карточка заполнена полностью" : "Карточка заполнена на \(Int(part * 100))%")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: 200)
+    }
+
+    /// Обучение: что показали сотруднику и когда.
+    @ViewBuilder private var trainings: some View {
+        let list = emp["trainings"]?.array ?? []
+        Section {
+            ForEach(list.indices, id: \.self) { i in
+                LabeledContent(list[i]["text"]?.string ?? "", value: Readable.date(list[i]["date"]?.string ?? ""))
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            var l = list
+                            l.remove(at: i)
+                            emp["trainings"] = .array(l)
+                        } label: { Label("Убрать", systemImage: "trash") }
+                    }
+            }
+            Menu {
+                ForEach(["Показал, как сканировать", "Настроил почту на телефоне", "Объяснил, как подключиться к Wi-Fi",
+                         "Показал, как печатать с телефона", "Научил пользоваться 1С", "Рассказал про пароли и безопасность"],
+                        id: \.self) { t in
+                    Button(t) {
+                        emp["trainings"] = .array(list + [.object(["text": .string(t), "date": .string(Dates.text(Date()))])])
+                    }
+                }
+            } label: {
+                Label("Отметить обучение", systemImage: "graduationcap")
+            }
+        } header: { Text("Обучение") } footer: {
+            if !list.isEmpty { Text("Сохраняется кнопкой «Сохранить».") }
+        }
     }
 
     // ── чек-лист нового сотрудника ──────────────────────────────────────────

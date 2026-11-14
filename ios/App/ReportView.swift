@@ -8,6 +8,7 @@ struct ReportView: View {
     @State private var flips = 0
     @State private var mailing = false
     @State private var party = 0               // отчёт ушёл — конфетти
+    @State private var closed: String?         // заявку только что закрыли — галочка рисуется
     @State private var mailAsk: String?
     @State private var error: String?
     @State private var query = ""
@@ -86,6 +87,7 @@ struct ReportView: View {
         do {
             toast = try await ReportMail.send(MailSettings.load(), monday: monday, entries: store.reportEntries(week: monday))
             party += 1                             // конфетти и самолётик: отчёт ушёл
+            Feel.sent()
             Reminder.sent(monday)                  // отчёт ушёл — пятничное напоминание за эту неделю не нужно
         } catch { self.error = error.localizedDescription }
     }
@@ -94,8 +96,15 @@ struct ReportView: View {
 
     /// Строка записи: нажатие — правка; долгое нажатие — в шаблоны или удалить (свайп по строке листает страницы).
     private func row(_ e: Entry, dated: Bool = false) -> some View {
-        Button { editing = e } label: { EntryRow(e: e, dated: dated) }.tint(.primary)
+        Button { editing = e } label: { EntryRow(e: e, dated: dated, justClosed: closed == e.uid) }.tint(.primary)
             .contextMenu {
+                if e.inWork == true {
+                    Button {
+                        closed = e.uid
+                        store.closeEntry(e.uid)
+                        toast = "Заявка закрыта"
+                    } label: { Label("Закрыть заявку", systemImage: "checkmark.circle") }
+                }
                 Button {
                     templating = EntryTemplate("", "", e.description ?? "", e.actions ?? "", e.result ?? "")
                 } label: { Label("Сохранить как шаблон", systemImage: "text.badge.plus") }
@@ -155,6 +164,12 @@ struct ReportView: View {
                 store.action = nil
                 withAnimation(.snappy) { day = Date() }
                 await askMail()
+            case .openEntry(let uid):
+                store.action = nil
+                if let e = store.state.entries.first(where: { $0.uid == uid }) {
+                    withAnimation(.snappy) { day = Dates.parse(e.date) }
+                    editing = e
+                }
             default:
                 break
             }
@@ -226,7 +241,7 @@ struct ReportView: View {
         .gesture(DragGesture(minimumDistance: 30).onEnded { v in
             if v.translation.width < -60 { shift(7) } else if v.translation.width > 60 { shift(-7) }
         })
-        .sensoryFeedback(.selection, trigger: flips)
+        .feel(.selection, trigger: flips)
         .animation(.snappy, value: isThisWeek)
     }
 
@@ -263,6 +278,7 @@ struct EntryRow: View {
     let e: Entry
     /// В результатах поиска записи из разных недель — у каждой показана дата.
     var dated = false
+    var justClosed = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -284,6 +300,16 @@ struct EntryRow: View {
                     Label(s, systemImage: "checkmark.seal").font(.caption).foregroundStyle(.green)
                 }
             }
+            Spacer(minLength: 0)
+            if e.inWork == true {
+                Label("в работе", systemImage: "hourglass").font(.caption2.weight(.bold)).foregroundStyle(.orange)
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(Color.orange.opacity(0.15), in: Capsule())
+            } else if justClosed {
+                Image(systemName: "checkmark.circle.fill").font(.title3).foregroundStyle(.green)
+                    .symbolEffect(.bounce, value: justClosed)
+                    .transition(.scale.combined(with: .opacity))
+            }
         }
         .padding(.vertical, 2)
     }
@@ -302,8 +328,10 @@ struct EntryEditor: View {
     @State private var actions: String
     @State private var result: String
     @State private var device: String
+    @State private var inWork: Bool
     @State private var error: String?
     @State private var templatesOpen = false
+    @State private var voice = false
 
     /// Поля заполняются один раз, при создании. В onAppear они заполнялись заново при возврате
     /// из «Изменить шаблоны», и всё набранное стиралось.
@@ -316,6 +344,7 @@ struct EntryEditor: View {
         _actions = State(initialValue: entry.actions ?? "")
         _result = State(initialValue: entry.result ?? "")
         _device = State(initialValue: entry.device ?? "")
+        _inWork = State(initialValue: entry.inWork == true)
     }
 
     /// Техника того, на кого заявка. Устройство уже выбрано, а человека в поле сменили — оставляем его
@@ -354,6 +383,10 @@ struct EntryEditor: View {
                     } label: {
                         Label("Заполнить по шаблону", systemImage: "text.badge.plus")
                     }
+                    Button { voice = true } label: { Label("Надиктовать", systemImage: "mic.fill") }
+                    Toggle(isOn: $inWork) { Label("В работе", systemImage: "hourglass") }
+                } footer: {
+                    Text("«В работе» — заявка висит на главной и числом на значке приложения, пока её не закроют.")
                 }
                 Section {
                     DatePicker("День", selection: $date, displayedComponents: .date)
@@ -375,6 +408,9 @@ struct EntryEditor: View {
             .animation(.snappy, value: employee)
             .keyboardDone()
             .navigationDestination(isPresented: $templatesOpen) { TemplatesView() }
+            .sheet(isPresented: $voice) {
+                VoiceSheet { heard($0) }.presentationDetents([.medium]).presentationCornerRadius(24)
+            }
             .navigationTitle(entry.uid.isEmpty ? "Новая запись" : "Запись")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -388,10 +424,24 @@ struct EntryEditor: View {
     func save() {
         do {
             try store.saveEntry(uid: entry.uid.isEmpty ? nil : entry.uid, date: date, employee: employee,
-                                description: description, actions: actions, result: result, device: device)
+                                description: description, actions: actions, result: result, device: device, inWork: inWork)
             onSaved(entry.uid.isEmpty ? "Запись добавлена" : "Сохранено", date)
             dismiss()
         } catch { self.error = error.localizedDescription }
+    }
+
+    /// Надиктованное: фамилия из учёта в тексте — это сотрудник; весь текст — в описание.
+    private func heard(_ text: String) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        let low = t.lowercased()
+        if employee.isEmpty, let p = store.people.first(where: { p in
+            let last = p.fio.split(separator: " ").first.map { String($0).lowercased() } ?? ""
+            return last.count >= 4 && low.contains(last.prefix(max(4, last.count - 2)))
+        }) {
+            employee = p.fio
+        }
+        withAnimation(.snappy) { description = description.isEmpty ? t : description + " " + t }
     }
 
     private func apply(_ t: EntryTemplate) {
@@ -435,6 +485,7 @@ struct TemplatesView: View {
         }
         .environment(\.editMode, $mode)
         .animation(.snappy, value: store.templates)
+        .feel(.impact(weight: .medium), trigger: store.templates.map(\.id))    // «магнит»: перестановка отзывается
         .navigationTitle("Шаблоны")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

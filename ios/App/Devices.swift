@@ -77,6 +77,7 @@ struct DeviceSheet: View {
     @State private var transferring = false
     @State private var repair: Entry?
     @State private var toast: String?
+    @State private var flipped = false                  // обратная сторона: QR и серийный номер
 
     var body: some View {
         NavigationStack {
@@ -92,6 +93,14 @@ struct DeviceSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { dismiss() } }
+                if let d = store.device(deviceId) {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        let fav = d.item["favorite"]?.bool == true
+                        Button { store.setDeviceFavorite(d, !fav) } label: { Image(systemName: fav ? "star.fill" : "star") }
+                            .symbolEffect(.bounce, value: fav)
+                            .accessibilityLabel(fav ? "Убрать из избранного" : "В избранное")
+                    }
+                }
             }
             .sheet(isPresented: $transferring) {
                 TransferSheet(deviceId: deviceId) { toast = $0 }.presentationCornerRadius(24)
@@ -101,6 +110,42 @@ struct DeviceSheet: View {
             }
             .toast($toast)
         }
+    }
+
+    /// Карточка: долгое нажатие переворачивает — сзади QR-код (модель, инв. и серийный номер), для наклейки.
+    private func card(_ d: DeviceRef) -> some View {
+        let serial = ["serial", "sn", "inv"].compactMap { d.item[$0]?.string }.first { !$0.isEmpty } ?? ""
+        let code = [store.deviceTitle(d), d.item["inv"]?.string ?? "", serial].filter { !$0.isEmpty }.joined(separator: " · ")
+        return ZStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(store.deviceTitle(d)).font(.headline)
+                Label(d.holder.isEmpty ? "На складе" : "У сотрудника: " + store.holderName(d.holder),
+                      systemImage: d.holder.isEmpty ? "shippingbox.fill" : "person.fill")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                Text("Удержите — QR-код").font(.caption2).foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .opacity(flipped ? 0 : 1)
+            HStack(spacing: 14) {
+                if let img = QR.image(code) {
+                    Image(uiImage: img).interpolation(.none).resizable().frame(width: 110, height: 110)
+                        .accessibilityLabel("QR-код устройства")
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(serial.isEmpty ? "Номера нет" : serial).font(.title3.monospaced().bold())
+                    Text(store.deviceTitle(d)).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .rotation3DEffect(.degrees(180), axis: (x: 0, y: 1, z: 0))
+            .opacity(flipped ? 1 : 0)
+        }
+        .padding(.vertical, 6)
+        .overlay { HoloSheen().clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous)) }
+        .rotation3DEffect(.degrees(flipped ? 180 : 0), axis: (x: 0, y: 1, z: 0))
+        .animation(.spring(response: 0.6, dampingFraction: 0.8), value: flipped)
+        .onLongPressGesture(minimumDuration: 0.35) { flipped.toggle() }
+        .accessibilityAction(named: flipped ? "Показать карточку" : "Показать QR-код") { flipped.toggle() }
     }
 
     private func content(_ d: DeviceRef) -> some View {
@@ -115,13 +160,17 @@ struct DeviceSheet: View {
         let cartridge = d.item["cartridge"]?.string ?? ""
         return List {
             Section {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(store.deviceTitle(d)).font(.headline)
-                    Label(d.holder.isEmpty ? "На складе" : "У сотрудника: " + store.holderName(d.holder),
-                          systemImage: d.holder.isEmpty ? "shippingbox.fill" : "person.fill")
-                        .font(.subheadline).foregroundStyle(.secondary)
+                card(d)
+                // значение копируется касанием
+                ForEach(fields.indices, id: \.self) { i in
+                    LabeledContent(fields[i].0, value: fields[i].1)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            UIPasteboard.general.string = fields[i].1
+                            toast = "Скопировано: " + fields[i].0
+                        }
+                        .accessibilityHint("Нажмите, чтобы скопировать")
                 }
-                ForEach(fields.indices, id: \.self) { i in LabeledContent(fields[i].0, value: fields[i].1) }
                 if !cartridge.isEmpty { LabeledContent("Картридж", value: cartridge) }
                 if !bought.isEmpty {
                     LabeledContent("Куплен", value: Readable.date(bought) + " · " + ageText(Store.age(d.item, today: store.today) ?? 0))

@@ -1,3 +1,4 @@
+import Charts
 import SwiftUI
 
 /// Сводка за месяц или год: сколько заявок и картриджей, кто и с чем обращается чаще.
@@ -6,6 +7,7 @@ struct SummaryView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var yearly = false
     @State private var day = Date()               // любой день показанного периода
+    @State private var grown = false              // столбики графиков вырастают при открытии
 
     private static let letters = ["Я", "Ф", "М", "А", "М", "И", "И", "А", "С", "О", "Н", "Д"]
 
@@ -47,6 +49,12 @@ struct SummaryView: View {
                 if s.byMonth.count == 12, s.entries > 0 {
                     Section("Заявки по месяцам") { bars(s.byMonth) }
                 }
+                if !s.byProblem.isEmpty || !s.byUnit.isEmpty {
+                    Section("Графики") {
+                        chart("С чем обращаются", Array(s.byProblem.prefix(5)), Brand.blue)
+                        chart("Картриджи по отделам", Array(s.byUnit.prefix(5)), .orange)
+                    }
+                }
                 top("Кто обращается чаще", s.byPerson)
                 top("С чем обращаются", s.byProblem)
                 top("Картриджи по отделам", s.byUnit, suffix: " шт.")
@@ -56,6 +64,11 @@ struct SummaryView: View {
                                            description: Text("Нет ни заявок, ни выдач картриджей."))
                 }
                 fleet
+            }
+            .onAppear {
+                if Motion.reduced { grown = true } else {
+                    withAnimation(.spring(response: 0.8, dampingFraction: 0.8).delay(0.25)) { grown = true }
+                }
             }
             .navigationTitle("Сводка")
             .navigationBarTitleDisplayMode(.inline)
@@ -153,5 +166,22 @@ struct SummaryView: View {
         }
         .frame(height: 104, alignment: .bottom)
         .padding(.vertical, 4)
+    }
+
+    /// Горизонтальные столбики: вырастают слева направо, справа — число.
+    @ViewBuilder private func chart(_ title: String, _ items: [Summary.Top], _ color: Color) -> some View {
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title).font(.subheadline.weight(.semibold))
+                Chart(items) { t in
+                    BarMark(x: .value("Сколько", grown ? t.count : 0), y: .value("Что", t.name))
+                        .foregroundStyle(color.gradient)
+                        .annotation(position: .trailing) { Text("\(t.count)").font(.caption2).foregroundStyle(.secondary) }
+                }
+                .chartXAxis(.hidden)
+                .frame(height: CGFloat(items.count) * 30 + 10)
+            }
+            .padding(.vertical, 4)
+        }
     }
 }

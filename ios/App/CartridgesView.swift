@@ -122,7 +122,7 @@ struct CartridgesView: View {
                 .onAppear { proxy.scrollTo(month, anchor: .center) }
                 .onChange(of: month) { _, m in withAnimation(.snappy) { proxy.scrollTo(m, anchor: .center) } }
             }
-            .sensoryFeedback(.selection, trigger: month)
+            .feel(.selection, trigger: month)
         }
     }
 
@@ -236,7 +236,7 @@ struct CartEditor: View {
                                 .animation(.snappy, value: qty)
                         }
                     }
-                    .sensoryFeedback(.selection, trigger: qty)
+                    .feel(.selection, trigger: qty)
                 }
                 TextField("Примечание", text: $note)
             }

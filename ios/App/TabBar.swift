@@ -99,8 +99,8 @@ struct GlassTabBar: View {
         .glassEffect(.regular, in: Capsule())
         .shadow(color: .black.opacity(scheme == .dark ? 0.6 : 0.15), radius: 14, y: 6)
         .onChange(of: selection) { _, t in taps[t, default: 0] += 1 }     // иконка оживает, когда страница сменилась
-        .sensoryFeedback(.selection, trigger: hovered) { _, new in new != nil }
-        .sensoryFeedback(.impact(weight: .light), trigger: selection)
+        .feel(.selection, trigger: hovered) { _, new in new != nil }
+        .feel(.impact(weight: .light), trigger: selection)
     }
 
     private func tab(at x: CGFloat, width w: CGFloat) -> AppTab {

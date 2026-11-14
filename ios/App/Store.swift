@@ -30,6 +30,10 @@ struct LocalState: Codable {
     var lastCheck: Date?
     var checkResult = ""
     var checkOK = false
+    /// сеть: роутеры, коммутаторы, точки Wi-Fi, серверы, камеры (пароли — в связке ключей iPhone)
+    var network: [Dict] = []
+    /// nil — должности не меняли, берутся стандартные
+    var positions: [Position]?
 
     init() {}
 
@@ -57,12 +61,16 @@ struct LocalState: Codable {
         lastCheck = try c.decodeIfPresent(Date.self, forKey: .lastCheck)
         checkResult = try c.decodeIfPresent(String.self, forKey: .checkResult) ?? ""
         checkOK = try c.decodeIfPresent(Bool.self, forKey: .checkOK) ?? false
+        network = try c.decodeIfPresent([Dict].self, forKey: .network) ?? []
+        positions = try c.decodeIfPresent([Position].self, forKey: .positions)
     }
 }
 
 /// Быстрые кнопки главной и «+» над панелью: что сделать на странице.
 enum QuickAction: Equatable {
     case newEntry, newCart, findEmployee, sendReport, newEmployee
+    /// из поиска и проверки данных: открыть карточку сотрудника или запись
+    case openEmployee(String), openEntry(String)
 }
 
 /// Сводка за месяц или год: сколько заявок и картриджей, кто и с чем обращается чаще.
@@ -192,6 +200,7 @@ final class Store: ObservableObject {
         if fresh { persist() }
         purgeTrash()
         syncReminders()
+        Position.current = positions
     }
 
     static func newId() -> String { UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() }
@@ -216,6 +225,8 @@ final class Store: ObservableObject {
         state.changedAt = Date()
         persist()
         syncReminders()
+        Position.current = positions
+        Badge.set(state.entries.reduce(0) { $0 + ($1.inWork == true ? 1 : 0) })
     }
 
     /// Вернуть то, что удалили последним. false — возвращать уже нечего.
@@ -813,7 +824,7 @@ final class Store: ObservableObject {
     }
 
     func saveEntry(uid: String?, date: Date, employee: String, description: String,
-                   actions: String, result: String, device: String = "") throws {
+                   actions: String, result: String, device: String = "", inWork: Bool = false) throws {
         let t = { (s: String) in s.trimmingCharacters(in: .whitespacesAndNewlines) }
         let f = [t(employee), t(description), t(actions), t(result)]
         guard f.contains(where: { !$0.isEmpty }) else { throw APIError(message: "Заполните хотя бы одно поле.") }
@@ -821,7 +832,10 @@ final class Store: ObservableObject {
         guard (2...6).contains(wd) else { throw APIError(message: "Выберите день с понедельника по пятницу.") }
         let id = uid ?? String(Store.newId().prefix(8))
         let entry = Entry(uid: id, date: Dates.text(date), employee: f[0], description: f[1], actions: f[2], result: f[3],
-                          device: device.isEmpty ? nil : device)
+                          device: device.isEmpty ? nil : device, inWork: inWork ? true : nil)
+        // была в работе, а теперь нет — заявка закрыта: «дзынь»
+        if !inWork, state.entries.first(where: { $0.uid == id })?.inWork == true { Feel.ding() }
+        if inWork { Task { await Badge.allow() } }
         change { s in
             if let i = s.entries.firstIndex(where: { $0.uid == id }) { s.entries[i] = entry } else { s.entries.append(entry) }
         }
@@ -1254,7 +1268,7 @@ final class Store: ObservableObject {
         BackupFile(note: BackupFile.readme, app: "REPORTER", exported_at: Dates.stamp.string(from: Date()), meta: meta,
                    units: state.units, employees: state.employees, entries: state.entries, cartridges: state.carts,
                    templates: state.templates, storeroom: state.storeroom, device_log: state.deviceLog,
-                   checklist: state.checklist)
+                   checklist: state.checklist, network: state.network, positions: state.positions)
     }
 
     /// По расписанию при открытии и сворачивании (или по кнопке): Excel для чтения и JSON для восстановления —
@@ -1355,10 +1369,181 @@ final class Store: ObservableObject {
             s.storeroom = b.storeroom ?? [:]
             s.deviceLog = b.device_log ?? []
             if let c = b.checklist { s.checklist = c }
+            if let n = b.network { s.network = n }
+            if let p = b.positions { s.positions = p }
             for i in s.employees.indices { Store.giveIds(&s.employees[i]) }
             Store.giveIds(&s.storeroom)
         }
         restores += 1
         backupStatus = "Восстановлено: \(b.stats)"
+    }
+}
+
+// ── 5.5: заявки в работе, избранное, сеть, должности, импорт, проверка данных ──
+extension Store {
+    /// Заявки «в работе» — свежие первыми.
+    var inWork: [Entry] { state.entries.filter { $0.inWork == true }.sorted { $0.date > $1.date } }
+
+    /// Закрыть заявку из списка: снимается «в работе», звучит «дзынь».
+    func closeEntry(_ uid: String) {
+        guard let i = state.entries.firstIndex(where: { $0.uid == uid }), state.entries[i].inWork == true else { return }
+        change { s in s.entries[i].inWork = nil }
+        Feel.ding()
+    }
+
+    var positions: [Position] { state.positions ?? Position.defaults }
+
+    func setPositions(_ list: [Position]) {
+        change { s in s.positions = list }
+    }
+
+    // ── избранное: сверху «Учёта» ──
+    var favorites: [Dict] { state.employees.filter { $0["favorite"]?.bool == true && !Store.isDismissed($0) } }
+    var favoriteDevices: [DeviceRef] { allDevices.filter { $0.item["favorite"]?.bool == true } }
+
+    func setFavorite(_ id: String, _ on: Bool) {
+        guard let i = state.employees.firstIndex(where: { $0["id"]?.string == id }) else { return }
+        change { s in s.employees[i]["favorite"] = on ? .bool(true) : nil }
+    }
+
+    func setDeviceFavorite(_ d: DeviceRef, _ on: Bool) {
+        change { s in
+            func mark(_ holder: inout Dict) {
+                var list = holder[d.group]?.array ?? []
+                guard let k = list.firstIndex(where: { $0["id"]?.string == d.id }), case .object(var item) = list[k] else { return }
+                item["favorite"] = on ? .bool(true) : nil
+                list[k] = .object(item)
+                holder[d.group] = .array(list)
+            }
+            if d.holder.isEmpty {
+                mark(&s.storeroom)
+            } else if let i = s.employees.firstIndex(where: { $0["id"]?.string == d.holder }) {
+                mark(&s.employees[i])
+            }
+        }
+    }
+
+    // ── сеть ──
+    func saveNetwork(_ item: Dict) {
+        var item = item
+        if (item["id"]?.string ?? "").isEmpty { item["id"] = .string(Store.newId()) }
+        let id = item["id"]?.string ?? ""
+        change { s in
+            if let i = s.network.firstIndex(where: { $0["id"]?.string == id }) { s.network[i] = item } else { s.network.append(item) }
+        }
+    }
+
+    func deleteNetwork(_ id: String) {
+        Keychain.set("net." + id, "")
+        change { s in s.network.removeAll { $0["id"]?.string == id } }
+    }
+
+    // ── импорт сотрудников из Excel ──
+    struct ImportRow: Identifiable {
+        let id = UUID()
+        var emp: Dict
+        let unit: String
+        let exists: Bool
+    }
+
+    /// Строки листа → карточки. Шапка — первая строка, где есть ФИО или Фамилия; столбцы узнаём по названию.
+    func importPreview(_ rows: [[String]]) throws -> [ImportRow] {
+        func norm(_ s: String) -> String { s.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard let h = rows.firstIndex(where: { r in r.contains { ["фио", "фамилия", "сотрудник"].contains(norm($0)) } }) else {
+            throw APIError(message: "Не нашёл шапку: нужен столбец «ФИО» (или «Фамилия», «Имя», «Отчество»).")
+        }
+        let head = rows[h].map(norm)
+        func col(_ names: [String]) -> Int? { head.firstIndex { c in names.contains { c.hasPrefix($0) } } }
+        let fio = col(["фио", "сотрудник"]), last = col(["фамилия"]), first = col(["имя"]), middle = col(["отчество"])
+        let pos = col(["должность"]), unit = col(["подразделение", "отдел"]), office = col(["кабинет"])
+        let phone = col(["телефон"]), mail = col(["почта", "email", "e-mail"]), birth = col(["день рождения", "дата рождения"])
+        let known = Set(state.employees.map { Store.fio($0).lowercased() })
+        return rows.dropFirst(h + 1).compactMap { r -> ImportRow? in
+            func v(_ i: Int?) -> String {
+                guard let i, i < r.count else { return "" }
+                return r[i].trimmingCharacters(in: .whitespaces)
+            }
+            var parts = fio.map { v($0).split(separator: " ").map(String.init) } ?? []
+            if parts.isEmpty { parts = [v(last), v(first), v(middle)].filter { !$0.isEmpty } }
+            guard !parts.isEmpty else { return nil }
+            var e: Dict = ["last_name": .string(parts[0])]
+            if parts.count > 1 { e["first_name"] = .string(parts[1]) }
+            if parts.count > 2 { e["middle_name"] = .string(parts[2...].joined(separator: " ")) }
+            for (key, i) in [("position", pos), ("office", office), ("phone", phone), ("email", mail)] where !v(i).isEmpty {
+                e[key] = .string(v(i))
+            }
+            var b = v(birth)
+            // Excel хранит дату числом дней от 30.12.1899; бывает и текстом «15.03.1990»
+            if let days = Double(b), days > 1000,
+               let d = Calendar(identifier: .gregorian).date(byAdding: .day, value: Int(days), to: Dates.parse("1899-12-30")) {
+                b = Dates.text(d)
+            } else {
+                let p = b.split(separator: ".")
+                if p.count == 3, p[2].count == 4 { b = "\(p[2])-\(p[1])-\(p[0])" }
+            }
+            if Dates.iso.date(from: b) != nil { e["birthday"] = .string(b) }
+            return ImportRow(emp: e, unit: v(unit), exists: known.contains(parts.joined(separator: " ").lowercased()))
+        }
+    }
+
+    /// Новых — в учёт; подразделение по названию, а нет такого — создаём. Возвращает, сколько добавлено.
+    @discardableResult
+    func importEmployees(_ rows: [ImportRow]) -> Int {
+        var added = 0
+        for r in rows where !r.exists {
+            let name = r.unit.trimmingCharacters(in: .whitespaces)
+            var unitId = rootUnit
+            if !name.isEmpty {
+                if units.first(where: { $0.name.lowercased() == name.lowercased() }) == nil {
+                    _ = try? saveUnit(id: "", name: name, parent: "")
+                }
+                if let u = units.first(where: { $0.name.lowercased() == name.lowercased() }) { unitId = u.id }
+            }
+            var full = newEmployee(unitId: unitId)
+            for (k, v) in r.emp { full[k] = v }
+            _ = saveEmployee(full)
+            added += 1
+        }
+        return added
+    }
+
+    // ── проверка данных ──
+    struct Issue: Identifiable {
+        let id = UUID()
+        let title: String
+        let detail: String
+        let employee: String?
+    }
+
+    /// Неточности: без подразделения, без должности, двойники, техника без модели и номера, одинаковые инв. номера.
+    func audit() -> [Issue] {
+        var out: [Issue] = []
+        let people = state.employees.filter { !Store.isDismissed($0) }
+        let unitIds = Set(state.units.compactMap { $0["id"]?.string })
+        for e in people {
+            let id = e["id"]?.string ?? "", fio = Store.fio(e)
+            if !unitIds.contains(e["unit_id"]?.string ?? "") {
+                out.append(Issue(title: fio, detail: "без подразделения", employee: id))
+            }
+            if (e["position"]?.string ?? "").trimmingCharacters(in: .whitespaces).isEmpty {
+                out.append(Issue(title: fio, detail: "не указана должность", employee: id))
+            }
+        }
+        for (_, same) in Dictionary(grouping: people, by: { Store.fio($0).lowercased() }) where same.count > 1 {
+            out.append(Issue(title: Store.fio(same[0]), detail: "в учёте \(same.count) раза — может, двойник",
+                             employee: same[0]["id"]?.string))
+        }
+        let devices = allDevices
+        for d in devices where (d.item["model"]?.string ?? "").isEmpty && (d.item["inv"]?.string ?? "").isEmpty {
+            out.append(Issue(title: deviceTitle(d), detail: "нет ни модели, ни инв. номера — " + holderName(d.holder),
+                             employee: d.holder.isEmpty ? nil : d.holder))
+        }
+        let withInv = devices.filter { !($0.item["inv"]?.string ?? "").isEmpty }
+        for (inv, same) in Dictionary(grouping: withInv, by: { $0.item["inv"]?.string ?? "" }) where same.count > 1 {
+            out.append(Issue(title: "Инв. номер " + inv,
+                             detail: "у \(same.count) устройств: " + same.map { holderName($0.holder) }.joined(separator: ", "),
+                             employee: nil))
+        }
+        return out
     }
 }
