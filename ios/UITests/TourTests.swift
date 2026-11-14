@@ -697,14 +697,14 @@ final class Tour {
         if toggle.value as? String != before { print("РАЗБОР \(name): сработало после прокрутки") }
     }
 
-    /// Прокрутить, пока элемент не окажется на экране. fromTop — сначала к началу страницы.
+    /// Прокрутить, пока элемент не окажется на экране выше нижней панели. fromTop — сначала к началу страницы.
     private func reveal(_ q: XCUIElementQuery, fromTop: Bool = false, tries: Int = 8) -> XCUIElement? {
         if fromTop { for _ in 0..<6 { drag(fromY: 0.3, toY: 0.85) } }
         for _ in 0..<tries {
-            if let e = visible(q) { return e }
+            if let e = tappable(q) { return e }
             drag(fromY: 0.72, toY: 0.38)
         }
-        return visible(q)
+        return tappable(q)
     }
 
     /// Набранная запись не стирается, если из неё зайти в «Изменить шаблоны» и вернуться.
@@ -777,7 +777,7 @@ final class Tour {
         tidy()
         open("Отчёт")
         let rows = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Не печатает принтер"))
-        guard let row = visible(rows) else {
+        guard let row = reveal(rows, tries: 3) else {                 // долгое нажатие под панелью ушло бы в неё
             XCTFail("Отчёт: нет записи, на которой проверить удаление")
             return
         }
@@ -808,7 +808,7 @@ final class Tour {
     private func asTemplate() {
         tidy()
         open("Отчёт")
-        guard let row = visible(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Не печатает принтер"))) else {
+        guard let row = reveal(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Не печатает принтер")), tries: 3) else {
             XCTFail("Отчёт: нет записи, из которой сделать шаблон")
             return
         }
@@ -1475,6 +1475,21 @@ final class Tour {
         }
     }
 
+    /// То же, что visible, но центр — не под нижней панелью: касание там забирает панель (выбирает ближайшую вкладку),
+    /// а XCUITest считает элемент нажимаемым — рамки значков вкладок узкие, между ними «дыры». Так быстрая кнопка
+    /// «Картридж» открывала «Учёт», а «Найти» — «Картриджи».
+    private func tappable(_ q: XCUIElementQuery) -> XCUIElement? {
+        let s = screen
+        return q.allElementsBoundByIndex.first { $0.exists && $0.isHittable && s.contains($0.frame) && !underBar($0.frame) }
+    }
+
+    /// Над листом и при открытой клавиатуре панели нет (её вкладки не нажимаются) — тогда она не мешает.
+    private func underBar(_ f: CGRect) -> Bool {
+        guard f.midY > screen.maxY - 150 else { return false }       // панель — у нижнего края, выше не спрашиваем
+        let bar = tab("Главная")
+        return bar.exists && bar.isHittable && f.midY > bar.frame.minY - 4
+    }
+
     /// Первый элемент, который на этом экране и нажимается (остальные страницы живут рядом за краем).
     private func visible(_ q: XCUIElementQuery) -> XCUIElement? {
         let s = screen
@@ -1541,7 +1556,7 @@ final class Tour {
     private func tapFirst(_ q: XCUIElementQuery, _ what: String) {
         let deadline = Date().addingTimeInterval(4)
         repeat {
-            if let e = visible(q) { e.tap(); return }
+            if let e = tappable(q) { e.tap(); return }
             pause(0.3)
         } while Date() < deadline
         if let e = reveal(q, tries: 4) {           // на главной карточек стало больше — кнопка ниже края
