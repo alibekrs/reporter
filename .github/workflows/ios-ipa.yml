@@ -117,10 +117,25 @@ jobs:
         run: |
           status=0
           only="${{ inputs.only }}"
+          mkdir -p "$RUNNER_TEMP/screens"
+          # разбор зависаний: приложение полминуты подряд занимает процессор целиком — снимок его стека (hang-N.txt)
+          ( n=0; hot=0
+            while sleep 10; do
+              pid=$(pgrep -f "ITtool.app/ITtool" | head -1 || true)
+              [ -z "$pid" ] && continue
+              cpu=$(ps -o %cpu= -p "$pid" | awk '{print int($1)}' || true)
+              if [ "${cpu:-0}" -ge 90 ]; then hot=$((hot + 1)); else hot=0; fi
+              if [ "$hot" -ge 3 ] && [ "$n" -lt 3 ]; then
+                n=$((n + 1)); hot=0
+                sample "$pid" 3 -file "$RUNNER_TEMP/screens/hang-$n.txt" > /dev/null 2>&1 || true
+              fi
+            done ) &
+          watch=$!
           xcodebuild test -project ITtool.xcodeproj -scheme ITtool -destination "id=$UDID" \
             ${only:+-only-testing:ITtoolUITests/TourTests/$only} \
             -resultBundlePath "$RUNNER_TEMP/ui.xcresult" CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual \
             > "$RUNNER_TEMP/ui.log" 2>&1 || status=$?
+          kill "$watch" 2> /dev/null || true
           grep -E "error:|warning: .*/(App|UITests)/|Test Case|Executed|TEST (SUCCEEDED|FAILED)|РАЗБОР" "$RUNNER_TEMP/ui.log" || true
           exit $status
 
@@ -145,6 +160,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/screens"
           cp "$HOME/Library/Caches/reporter-screens/"*.png "$RUNNER_TEMP/screens/" 2>/dev/null || true
           cp "$RUNNER_TEMP/ui.log" "$RUNNER_TEMP/screens/" 2>/dev/null || true
+          # журнал приложения из симулятора: ошибки и предупреждения SwiftUI (цикл обновлений, правка состояния при отрисовке)
+          if [ -n "$UDID" ]; then
+            xcrun simctl spawn "$UDID" log show --last 20m --style compact \
+              --predicate 'process == "ITtool" AND (messageType == error OR messageType == fault OR subsystem CONTAINS "SwiftUI" OR subsystem CONTAINS "runtime-issues")' \
+              2>/dev/null | tail -400 > "$RUNNER_TEMP/screens/app.log" || true
+          fi
           ls "$RUNNER_TEMP/screens"
 
       - uses: actions/upload-artifact@v4

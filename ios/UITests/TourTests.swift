@@ -7,6 +7,10 @@ final class TourTests: XCTestCase {
         continueAfterFailure = true          // одна ошибка не обрывает проход — нужны все скриншоты
     }
 
+    /// Быстрая проверка (в workflow — only=test0Tabs): переходы между «Учётом» и главной нажатием на панель
+    /// и через «Найти» с поиском. В 5.6 после поиска возврат на главную подвешивал приложение.
+    @MainActor func test0Tabs() { Tour(self, "tabs").tabs() }
+
     /// Тёмная тема, как на телефоне: заставка, вкладки, «+» на каждой странице, заведение данных,
     /// свайпы между страницами, быстрые кнопки главной, клавиатура, настройки.
     @MainActor func test1Dark() { Tour(self, "dark").full() }
@@ -45,6 +49,29 @@ final class Tour {
     }
 
     // ── сценарии ────────────────────────────────────────────────────────────
+
+    func tabs() {
+        launch()
+        pause(6)                                             // заставка
+        for round in 1...2 {
+            open("Учёт")
+            print("РАЗБОР вкладки: круг \(round) — «Учёт» открыт")
+            open("Главная")
+            print("РАЗБОР вкладки: круг \(round) — главная открыта")
+        }
+        tapFirst(app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "Найти")), "быстрая кнопка «Найти»")
+        pause(1.5)
+        dismissKeyboardTip()
+        shot("find")
+        closeSearch()
+        print("РАЗБОР вкладки: поиск закрыт")
+        open("Главная")
+        print("РАЗБОР вкладки: главная после поиска открыта")
+        shot("home-after-find")
+        open("Учёт")
+        open("Главная")
+        print("РАЗБОР вкладки: конец")
+    }
 
     func full() {
         launch()
