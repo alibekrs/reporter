@@ -171,7 +171,7 @@ final class Weather: ObservableObject {
             case .storm: return "⚡ Гроза — держите технику на ИБП"
             case .rain: return temp <= 1 ? "🧊 Гололёд — выходите пораньше" : "☂️ Возьмите зонт"
             case .snow: return "❄️ Снегопад — на дорогу больше времени"
-            case .fog: return "🌫 Туман — осторожно за рулём"
+            case .fog: return "🌫️ Туман — осторожно за рулём"
             case .clear, .cloudy: break
             }
             if wind >= 14 { return "💨 Сильный ветер" }
