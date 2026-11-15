@@ -118,16 +118,18 @@ jobs:
           status=0
           only="${{ inputs.only }}"
           mkdir -p "$RUNNER_TEMP/screens"
-          # разбор зависаний: приложение полминуты подряд занимает процессор целиком — снимок его стека (hang-N.txt)
-          ( n=0; hot=0
+          # разбор зависаний: приложение полминуты подряд занимает процессор целиком или тест начал переспрашивать
+          # экран («retry») — снимок стека приложения в артефакт (hang-N-cpuNN.txt)
+          ( n=0; hot=0; seen=0
             while sleep 10; do
               pid=$(pgrep -f "ITtool.app/ITtool" | head -1 || true)
               [ -z "$pid" ] && continue
               cpu=$(ps -o %cpu= -p "$pid" | awk '{print int($1)}' || true)
               if [ "${cpu:-0}" -ge 90 ]; then hot=$((hot + 1)); else hot=0; fi
-              if [ "$hot" -ge 3 ] && [ "$n" -lt 3 ]; then
-                n=$((n + 1)); hot=0
-                sample "$pid" 3 -file "$RUNNER_TEMP/screens/hang-$n.txt" > /dev/null 2>&1 || true
+              retries=$(grep -c "(retry " "$RUNNER_TEMP/ui.log" 2> /dev/null || true)
+              if { [ "$hot" -ge 3 ] || [ "${retries:-0}" -gt "$seen" ]; } && [ "$n" -lt 4 ]; then
+                n=$((n + 1)); hot=0; seen=${retries:-0}
+                sample "$pid" 3 -file "$RUNNER_TEMP/screens/hang-$n-cpu${cpu:-0}.txt" > /dev/null 2>&1 || true
               fi
             done ) &
           watch=$!

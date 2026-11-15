@@ -70,7 +70,27 @@ final class Tour {
         shot("home-after-find")
         open("Учёт")
         open("Главная")
-        print("РАЗБОР вкладки: конец")
+        print("РАЗБОР вкладки: без данных — конец")
+
+        // то же с сотрудником в учёте: в полном проходе зависало именно так
+        open("Учёт")
+        if let add = checkAdd("Учёт, разбор"), tapAdd(add, opens: "Новый сотрудник", "tabs") {
+            type("Фамилия", "Разборов")
+            tapBarButton("Новый сотрудник", "Сохранить")
+            let card = app.navigationBars["Разборов"]
+            if card.waitForExistence(timeout: 4) { card.buttons.element(boundBy: 0).tap() }
+            pause(1)
+        }
+        open("Главная")
+        tapFirst(app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "Найти")), "быстрая кнопка «Найти»")
+        pause(1.5)
+        dismissKeyboardTip()
+        shot("find-data")
+        closeSearch()
+        print("РАЗБОР вкладки: поиск закрыт (с данными)")
+        open("Главная")
+        print("РАЗБОР вкладки: главная после поиска открыта (с данными)")
+        shot("home-after-find-data")
     }
 
     func full() {

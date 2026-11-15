@@ -26,6 +26,7 @@ struct HomeView: View {
     @State private var weatherTick = 0               // значок погоды оживает: появился, обновили
     @ObservedObject private var weather = Weather.shared
     @Environment(\.openURL) private var openURL
+    @Environment(\.colorScheme) private var scheme
 
     private static let monthName: DateFormatter = {
         let f = DateFormatter()
@@ -443,7 +444,7 @@ extension HomeView {
                 Text(text).font(.subheadline.weight(.semibold))
             } icon: {
                 // значок живой: появился или обновили — подпрыгивает, а капли дождя и снежинки пробегают по нему
-                Image(systemName: weather.icon).symbolRenderingMode(.multicolor)
+                Image(systemName: weather.icon).symbolRenderingMode(weatherColors).foregroundStyle(Brand.blue)
                     .symbolEffect(.bounce, value: weatherTick)
                     .symbolEffect(.variableColor.iterative, value: weatherTick)
                     .onAppear { weatherTick += 1 }
@@ -461,15 +462,21 @@ extension HomeView {
                 cityDraft = ""
                 cityAsk = true
             } label: {
-                Label("Погода: указать город", systemImage: "cloud.sun.fill")
-                    .symbolRenderingMode(.multicolor)
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .glassEffect(.regular, in: Capsule())
+                Label {
+                    Text("Погода: указать город").foregroundStyle(.primary)
+                } icon: {
+                    Image(systemName: "cloud.sun.fill").symbolRenderingMode(weatherColors).foregroundStyle(Brand.blue)
+                }
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .glassEffect(.regular, in: Capsule())
             }
             .buttonStyle(PressStyle())
         }
     }
+
+    /// Цветной значок погоды — только на тёмном: в светлой теме его белое облако на светлом стекле не видно.
+    var weatherColors: SymbolRenderingMode { scheme == .dark ? .multicolor : .hierarchical }
 
     @ViewBuilder var holiday: some View {
         if let h = Holidays.near() {
