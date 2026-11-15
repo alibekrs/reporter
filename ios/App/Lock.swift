@@ -148,6 +148,8 @@ enum AppLock {
 @MainActor
 final class LockScreen: ObservableObject {
     static let shared = LockScreen()
+    /// Окно входа ушло с экрана: главная показывает то, что играет при открытии (карточки, листья).
+    static let opened = Notification.Name("reporter.lock.opened")
 
     enum Step { case pin, forgot, newPin }
 
@@ -155,19 +157,28 @@ final class LockScreen: ObservableObject {
     @Published var message = ""
     /// PIN-код или Face ID подошли: на миг галочка, потом окно уходит
     @Published var success = false
-    /// Приложение не на экране (переключатель приложений, окно Face ID): только значок и название, без кнопок.
-    @Published private(set) var cover = false
     /// С входом приложение стартует закрытым.
     private(set) var locked: Bool
     private var asked = false               // Face ID после закрытия уже спрашивали — сам второй раз не спрашивает
     private var leftAt: ContinuousClock.Instant?    // когда свернули открытое: часы идут и пока телефон спит
     private var asking = false
     private var window: UIWindow?
+    /// Значок вместо данных, пока приложение в фоне: таким оно попадает в переключатель приложений.
+    private var cover: UIWindow?
 
     private init() {
         // вход 5.1 был без PIN-кода — без него экран входа не открыть: включают заново, с PIN-кодом и почтой
         if AppLock.isOn && !AppLock.hasPIN { UserDefaults.standard.set(false, forKey: AppLock.key) }
         locked = AppLock.isOn
+        // значок ставим прямо по уведомлению системы: снимок экрана для переключателя приложений она делает
+        // сразу после него, а смена фазы в SwiftUI приходит позже
+        let nc = NotificationCenter.default
+        _ = nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil) { _ in
+            MainActor.assumeIsolated { LockScreen.shared.left() }
+        }
+        _ = nc.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: nil) { _ in
+            MainActor.assumeIsolated { LockScreen.shared.back() }
+        }
     }
 
     /// Запуск приложения: окно входа встаёт раньше первого кадра — данные не мелькают.
@@ -175,32 +186,53 @@ final class LockScreen: ObservableObject {
         if locked { show(scene) }
     }
 
-    /// Свернули — запоминаем когда; вернулись позже, чем через AppLock.grace, — экран входа и сразу Face ID.
+    /// Приложение на экране: закрыто — сразу Face ID. Вход выключили в настройках — окна входа больше нет.
     func scene(_ phase: ScenePhase) {
         guard AppLock.isOn else {
             locked = false
             hide()
             return
         }
-        if phase == .background {
-            if !locked { leftAt = .now }
-            asked = false
-            step = .pin
-            message = ""
-            hideKeyboard()        // клавиатура живёт в своём окне выше входа — не оставляем её над ним
+        switch phase {
+        case .background:
+            left()                    // обычно уже сделано по уведомлению системы
+        case .active:
+            back()
+            guard locked else { return }
+            window?.makeKey()         // поле ключа на экране входа получает клавиатуру
+            if !asked, AppLock.canFaceID {
+                asked = true
+                Task { await faceID() }
+            }
+        default:
+            break                     // шторка уведомлений, пункт управления, окно Face ID: приложение не свёрнуто
         }
-        if phase == .active, let t = leftAt {
+    }
+
+    /// Свернули: запоминаем когда, и данные закрывает значок. Только в фоне: шторка уведомлений и пункт управления
+    /// приложение не сворачивают, а значок после них держался на экране ещё около секунды.
+    private func left() {
+        guard AppLock.isOn, cover == nil else { return }
+        if !locked { leftAt = .now }
+        asked = false
+        step = .pin
+        message = ""
+        hideKeyboard()                // клавиатура живёт в своём окне выше входа — не оставляем её над ним
+        guard let w = makeWindow(nil, level: .alert + 2, LockCover()) else { return }
+        w.layoutIfNeeded()            // рисуем сразу: снимок для переключателя приложений делается следом
+        cover = w
+    }
+
+    /// Возвращаются: вернулись позже, чем через AppLock.grace, — экран входа; значок убирается сразу.
+    private func back() {
+        if let t = leftAt {
             leftAt = nil
-            if ContinuousClock.now - t >= .seconds(AppLock.grace) { locked = true }
+            if AppLock.isOn, ContinuousClock.now - t >= .seconds(AppLock.grace) { locked = true }
         }
-        cover = phase != .active
-        if locked || cover { show() } else { hide() }
-        guard phase == .active, locked else { return }
-        window?.makeKey()         // поле ключа на экране входа получает клавиатуру
-        if !asked, AppLock.canFaceID {
-            asked = true
-            Task { await faceID() }
-        }
+        if locked { show() }
+        guard let c = cover else { return }
+        cover = nil
+        UIView.animate(withDuration: 0.2, animations: { c.alpha = 0 }, completion: { _ in c.isHidden = true })
     }
 
     func faceID() async {
@@ -246,16 +278,21 @@ final class LockScreen: ObservableObject {
     }
 
     private func show(_ scene: UIWindowScene? = nil) {
-        guard window == nil,
-              let scene = scene ?? UIApplication.shared.connectedScenes.lazy.compactMap({ $0 as? UIWindowScene }).first
-        else { return }
-        let w = UIWindow(windowScene: scene)
-        w.windowLevel = .alert + 1
-        let theme = UserDefaults.standard.integer(forKey: "theme")       // как applyTheme
-        w.overrideUserInterfaceStyle = theme == 1 ? .light : (theme == 2 ? .dark : .unspecified)
-        w.rootViewController = UIHostingController(rootView: LockView())
-        w.makeKeyAndVisible()
+        guard window == nil, let w = makeWindow(scene, level: .alert + 1, LockView()) else { return }
+        w.makeKey()
         window = w
+    }
+
+    /// Окно поверх приложения и его листов, в той же светлой или тёмной теме.
+    private func makeWindow<V: View>(_ scene: UIWindowScene?, level: UIWindow.Level, _ root: V) -> UIWindow? {
+        guard let scene = scene ?? UIApplication.shared.connectedScenes.lazy.compactMap({ $0 as? UIWindowScene }).first
+        else { return nil }
+        let w = UIWindow(windowScene: scene)
+        w.windowLevel = level
+        w.overrideUserInterfaceStyle = windowStyle(UserDefaults.standard.integer(forKey: "theme"))
+        w.rootViewController = UIHostingController(rootView: root)
+        w.isHidden = false
+        return w
     }
 
     private func hide() {
@@ -264,10 +301,24 @@ final class LockScreen: ObservableObject {
         // ввод — снова в главное окно приложения
         w.windowScene?.windows.first(where: { $0 !== w && $0.windowLevel == .normal })?.makeKey()
         UIView.animate(withDuration: 0.2, animations: { w.alpha = 0 }, completion: { _ in w.isHidden = true })
+        NotificationCenter.default.post(name: Self.opened, object: nil)
     }
 }
 
-/// Экран входа. Пока приложение не на экране — только значок и название.
+/// Что видно о приложении в переключателе приложений: только значок и название — ни данных, ни кнопок входа.
+struct LockCover: View {
+    var body: some View {
+        ZStack {
+            AppBackground()
+            VStack(spacing: 14) {
+                Image("Logo").resizable().scaledToFit().frame(height: 96)
+                Text("ITdesk").font(.title2.bold())
+            }
+        }
+    }
+}
+
+/// Экран входа.
 struct LockView: View {
     @ObservedObject private var lock = LockScreen.shared
     @State private var key = ""
@@ -279,21 +330,16 @@ struct LockView: View {
             VStack(spacing: 14) {
                 Image("Logo").resizable().scaledToFit().frame(height: digits ? 56 : 96)
                 Text("ITdesk").font(digits ? .headline : .title2.bold())
-                if !lock.cover {
-                    content
-                        .padding(.top, 8)
-                        .transition(.opacity)
-                }
+                content.padding(.top, 8)
             }
             .padding(.horizontal, 24)
         }
         .tint(Brand.blue)
         .animation(.snappy, value: lock.step)
-        .animation(.easeOut(duration: 0.15), value: lock.cover)
     }
 
     /// На шагах с цифрами значок меньше — цифрам нужно место.
-    private var digits: Bool { !lock.cover && (lock.step == .pin || lock.step == .newPin) }
+    private var digits: Bool { lock.step == .pin || lock.step == .newPin }
 
     @ViewBuilder private var content: some View {
         switch lock.step {

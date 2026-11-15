@@ -28,24 +28,57 @@ extension View {
         sensoryFeedback(f, trigger: trigger) { old, new in Feel.haptics && condition(old, new) }
     }
 
-    /// Первое появление: карточка выезжает снизу и проявляется.
-    func appearRise(_ delay: Double = 0) -> some View { modifier(Rise(delay: delay)) }
+    /// Карточка выезжает снизу и проявляется, когда on стало true; с задержкой — карточки идут по очереди.
+    /// on хранит страница, а не карточка: строки списка пересоздаются при прокрутке и выезжали бы заново.
+    func rise(_ on: Bool, _ delay: Double = 0) -> some View {
+        opacity(on ? 1 : 0)
+            .offset(y: on ? 0 : 22)
+            .scaleEffect(on ? 1 : 0.97)
+            .animation(Motion.reduced ? nil : Animation.spring(response: 0.6, dampingFraction: 0.8).delay(delay), value: on)
+    }
 }
 
-private struct Rise: ViewModifier {
-    let delay: Double
-    @State private var shown = false
+/// Число подпрыгивает, когда изменилось: «+1» к заявкам, картриджам, сотрудникам.
+struct Bump: ViewModifier {
+    let value: Int
+    @State private var up = false
 
     func body(content: Content) -> some View {
         content
-            .opacity(shown ? 1 : 0)
-            .offset(y: shown ? 0 : 16)
-            .onAppear {
-                guard !shown else { return }
-                if Motion.reduced { shown = true } else {
-                    withAnimation(.spring(response: 0.5, dampingFraction: 0.8).delay(delay)) { shown = true }
+            .scaleEffect(up ? 1.18 : 1, anchor: .leading)
+            .onChange(of: value) {
+                guard !Motion.reduced else { return }
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.5)) { up = true }
+                Task {
+                    try? await Task.sleep(for: .milliseconds(220))
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { up = false }
                 }
             }
+    }
+}
+
+/// Блик один раз пробегает по виду слева направо: именинник в «Учёте».
+struct Shine: ViewModifier {
+    var on = true
+    @State private var go = false
+
+    func body(content: Content) -> some View {
+        content.overlay {
+            if on {
+                GeometryReader { g in
+                    LinearGradient(colors: [.clear, Color.yellow.opacity(0.45), .clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: 70)
+                        .offset(x: go ? g.size.width + 70 : -70)
+                }
+                .clipped()
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+                .onAppear {
+                    guard !Motion.reduced else { return }
+                    withAnimation(.easeInOut(duration: 1.3).delay(0.4)) { go = true }
+                }
+            }
+        }
     }
 }
 
@@ -234,28 +267,36 @@ enum Congrats {
 @MainActor
 final class Tilt: ObservableObject {
     static let shared = Tilt()
-    @Published var x: Double = 0
-    @Published var y: Double = 0
+    /// Наклон от −1 до 1 по обеим осям — одним значением: одно обновление экрана на отсчёт датчика.
+    @Published private(set) var lean = CGSize.zero
     private let motion = CMMotionManager()
     private var users = 0
+    private var fx = 0.0, fy = 0.0          // сглаженный наклон; на экран идёт, когда сдвиг уже заметен
 
-    /// Датчик работает, только пока его кто-то показывает на экране, и не чаще 15 раз в секунду.
+    /// Датчик работает, только пока его кто-то показывает на экране. 60 отсчётов в секунду со сглаживанием:
+    /// при 15 карточки главной двигались рывками, и всё приложение казалось тормозящим.
     func start() {
         users += 1
         guard users == 1, !Motion.reduced, motion.isDeviceMotionAvailable else { return }
-        motion.deviceMotionUpdateInterval = 1.0 / 15
+        motion.deviceMotionUpdateInterval = 1.0 / 60
         motion.startDeviceMotionUpdates(to: .main) { [weak self] m, _ in
             guard let g = m?.gravity else { return }
-            MainActor.assumeIsolated {
-                self?.x = max(-1, min(1, g.x * 2))
-                self?.y = max(-1, min(1, (g.y + 0.55) * 2))      // телефон обычно держат под наклоном
-            }
+            MainActor.assumeIsolated { self?.feed(g.x, g.y) }
         }
     }
 
     func stop() {
         users = max(0, users - 1)
         if users == 0 { motion.stopDeviceMotionUpdates() }
+    }
+
+    private func feed(_ gx: Double, _ gy: Double) {
+        // к новому положению — на четверть пути за отсчёт: дрожь руки сглаживается
+        fx += (max(-1, min(1, gx * 2)) - fx) * 0.25
+        fy += (max(-1, min(1, (gy + 0.55) * 2)) - fy) * 0.25      // телефон обычно держат под наклоном
+        // сдвиг меньше пикселя не показываем: телефон лежит или просто в руке — экран не перерисовывается
+        guard abs(fx - Double(lean.width)) > 0.01 || abs(fy - Double(lean.height)) > 0.01 else { return }
+        lean = CGSize(width: fx, height: fy)
     }
 }
 
@@ -265,7 +306,7 @@ struct Parallax: ViewModifier {
     @ObservedObject private var tilt = Tilt.shared
 
     func body(content: Content) -> some View {
-        content.offset(x: tilt.x * amount, y: tilt.y * amount)
+        content.offset(x: tilt.lean.width * amount, y: tilt.lean.height * amount)
     }
 }
 
@@ -274,11 +315,11 @@ struct HoloSheen: View {
     @ObservedObject private var tilt = Tilt.shared
 
     var body: some View {
+        // без режима наложения: на тёмном фоне отлив в нём пропадал, а слой с наложением рисуется дороже
         AngularGradient(colors: [.pink, .yellow, .green, .cyan, .blue, .purple, .pink],
-                        center: UnitPoint(x: 0.5 + tilt.x * 0.4, y: 0.5 + tilt.y * 0.4),
-                        angle: .degrees(tilt.x * 90))
-            .opacity(Motion.reduced ? 0 : 0.28)
-            .blendMode(.overlay)
+                        center: UnitPoint(x: 0.5 + tilt.lean.width * 0.4, y: 0.5 + tilt.lean.height * 0.4),
+                        angle: .degrees(Double(tilt.lean.width) * 90))
+            .opacity(Motion.reduced ? 0 : 0.2)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
             .onAppear { Tilt.shared.start() }
@@ -326,8 +367,15 @@ struct Foil: ViewModifier {
 // ── падающие снежинки, лепестки, шарики: несколько секунд и исчезают ────────
 struct Fall: View {
     let emoji: [String]
+    /// Пора падать: главная уже видна. При запуске страницу закрывает заставка или окно входа — под ними
+    /// листья падали незаметно.
+    let on: Bool
+    /// Новый день — падает снова (приложение живёт в памяти сутками).
+    let day: String
     @State private var flakes: [Flake] = []
     @State private var go = false
+    /// За какой день уже падало: смена темы пересоздаёт страницу, и листья сыпались заново.
+    private static var played = ""
 
     struct Flake: Identifiable {
         let id: Int
@@ -348,8 +396,10 @@ struct Fall: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
-        .task {
-            guard !emoji.isEmpty, !Motion.reduced else { return }
+        .task(id: on ? day : "") {
+            guard on, Fall.played != day, !emoji.isEmpty, !Motion.reduced else { return }
+            Fall.played = day
+            go = false
             flakes = (0..<22).map { i in
                 Flake(id: i, x: .random(in: 0...1), drift: .random(in: -40...40), size: .random(in: 14...24),
                       delay: .random(in: 0...1.5), e: emoji[i % emoji.count])
@@ -358,6 +408,7 @@ struct Fall: View {
             go = true
             try? await Task.sleep(for: .seconds(7))
             flakes = []
+            go = false
         }
     }
 
@@ -382,13 +433,20 @@ struct Shake: GeometryEffect {
 }
 
 /// QR-код для обратной стороны карточки устройства.
+@MainActor
 enum QR {
+    /// Последний нарисованный код: карточка перерисовывается часто, а рисовать код заново — десятки миллисекунд.
+    private static var last: (text: String, image: UIImage)?
+
     static func image(_ text: String) -> UIImage? {
+        if let last, last.text == text { return last.image }
         let f = CIFilter.qrCodeGenerator()
         f.message = Data(text.utf8)
         f.correctionLevel = "M"
         guard let o = f.outputImage?.transformed(by: CGAffineTransform(scaleX: 8, y: 8)),
               let cg = CIContext().createCGImage(o, from: o.extent) else { return nil }
-        return UIImage(cgImage: cg)
+        let image = UIImage(cgImage: cg)
+        last = (text, image)
+        return image
     }
 }

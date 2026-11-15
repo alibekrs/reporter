@@ -47,11 +47,16 @@ struct SummaryView: View {
                     .listRowBackground(Color.clear)
                 }
                 if s.byMonth.count == 12, s.entries > 0 {
-                    Section("Заявки по месяцам") { bars(s.byMonth) }
+                    Section("Заявки по месяцам") { bars(s.byMonth, Brand.blue) }
                 }
-                if !s.byProblem.isEmpty || !s.byUnit.isEmpty {
+                if s.cartsByMonth.count == 12, s.carts > 0 {
+                    Section("Картриджи по месяцам") { bars(s.cartsByMonth, .orange) }
+                }
+                if !s.byProblem.isEmpty || !s.byUnit.isEmpty || !s.byEntryUnit.isEmpty || !s.byDevice.isEmpty {
                     Section("Графики") {
                         chart("С чем обращаются", Array(s.byProblem.prefix(5)), Brand.blue)
+                        chart("Заявки по отделам", s.byEntryUnit, .teal)
+                        chart("Проблемные устройства", s.byDevice, .red)
                         chart("Картриджи по отделам", Array(s.byUnit.prefix(5)), .orange)
                     }
                 }
@@ -148,8 +153,8 @@ struct SummaryView: View {
         }
     }
 
-    /// Двенадцать столбиков — заявки по месяцам года.
-    private func bars(_ counts: [Int]) -> some View {
+    /// Двенадцать столбиков — заявки или картриджи по месяцам года.
+    private func bars(_ counts: [Int], _ color: Color) -> some View {
         let most = max(counts.max() ?? 1, 1)
         return HStack(alignment: .bottom, spacing: 4) {
             ForEach(0..<12, id: \.self) { i in
@@ -157,7 +162,7 @@ struct SummaryView: View {
                     Text(counts[i] > 0 ? "\(counts[i])" : " ").font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(counts[i] > 0 ? Brand.blue : Color(.tertiarySystemFill))
+                        .fill(counts[i] > 0 ? color : Color(.tertiarySystemFill))
                         .frame(height: 4 + 56 * CGFloat(counts[i]) / CGFloat(most))
                     Text(Self.letters[i]).font(.caption2).foregroundStyle(.secondary)
                 }

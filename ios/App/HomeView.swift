@@ -18,10 +18,12 @@ struct HomeView: View {
     @State private var issues = 0                    // неточности в данных — считаются при открытии главной
     @State private var bubble: String?               // пузырёк сверху: день рождения, гарантия
     @AppStorage("bubble.day") private var bubbleDay = ""
-    @State private var pullY: CGFloat = 0            // «потяни вниз»: робот появляется и крутится
-    @State private var armed = false
-    @State private var spin = 0.0
-    @State private var spinning = false
+    @State private var pull = Pull()                 // «потяни вниз»: робот появляется и крутится
+    @State private var tilting = false               // датчик наклона включён главной
+    @AppStorage(Weather.cityKey) private var city = ""
+    @State private var cityAsk = false
+    @State private var cityDraft = ""
+    @State private var weatherTick = 0               // значок погоды оживает: появился, обновили
     @ObservedObject private var weather = Weather.shared
     @Environment(\.openURL) private var openURL
 
@@ -33,6 +35,9 @@ struct HomeView: View {
     }()
 
     var body: some View {
+        // дни рождения считаем один раз на перерисовку: расчёт по календарю для каждого сотрудника — не быстрый
+        let soon = store.birthdays(within: 7)
+        let party = soon.filter { $0.days == 0 }
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
@@ -43,13 +48,13 @@ struct HomeView: View {
                     .rise(shown, 0)
                     weatherChip.rise(shown, 0.01)
                     holiday.rise(shown, 0.02)
-                    birthdays.rise(shown, 0.03)
-                    congrats.rise(shown, 0.04)
+                    birthdays(soon).rise(shown, 0.03)
+                    congrats(party).rise(shown, 0.04)
                     inWorkCard.rise(shown, 0.04)
                     weekSummary.rise(shown, 0.05)
                     quoteCard.overlay(alignment: .bottomTrailing) { quoteShare }
-                        .modifier(Parallax(amount: 3)).rise(shown, 0.05)
-                    weekCard.modifier(Parallax(amount: 5)).rise(shown, 0.12)
+                        .modifier(Parallax(amount: 6)).rise(shown, 0.05)
+                    weekCard.modifier(Parallax(amount: 10)).rise(shown, 0.12)
                     tiles.rise(shown, 0.19)
                     summaryButton.rise(shown, 0.23)
                     actions.rise(shown, 0.28)
@@ -59,17 +64,15 @@ struct HomeView: View {
                 .padding(.bottom, 24)
             }
             .clearsBar(add: true)          // талисман стоит и на главной
-            // «потяни вниз»: робот показывается, отпустили — крутится, погода и мысль дня обновляются
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in pulled(y) }
+            // «потяни вниз»: робот показывается, отпустили — крутится, погода и мысль дня обновляются.
+            // Следим только за оттягиванием выше начала (меньше нуля): обычная прокрутка главную не трогает
+            .onScrollGeometryChange(for: CGFloat.self) { min(0, $0.contentOffset.y + $0.contentInsets.top) } action: { _, y in pulled(y) }
+            .overlay(alignment: .top) { PullBot(pull: pull) }
+            // день рождения сегодня — шарики; Наурыз — тюльпаны; иначе — по сезону
             .overlay(alignment: .top) {
-                PixelBot(mood: armed ? .happy : .idle)
-                    .frame(width: 46, height: 46)
-                    .rotationEffect(.degrees(spin))
-                    .opacity(spinning ? 1 : Double(min(1, max(0, -pullY / 70))))
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
+                Fall(emoji: party.isEmpty ? Fall.season : ["🎈", "🎉"], on: shown, day: store.today)
+                    .frame(height: 420).allowsHitTesting(false)
             }
-            .overlay(alignment: .top) { Fall(emoji: fall).frame(height: 420).allowsHitTesting(false) }
             .overlay(alignment: .topTrailing) {
                 if let bubble {
                     Text(bubble).font(.subheadline.weight(.semibold))
@@ -89,12 +92,25 @@ struct HomeView: View {
             .sheet(isPresented: $summaryOpen) { SummaryView().presentationCornerRadius(24) }
             .sheet(isPresented: $searchOpen) { GlobalSearchView(tab: $tab).presentationCornerRadius(24) }
             .sheet(isPresented: $auditOpen) { AuditView(tab: $tab).presentationCornerRadius(24) }
+            .alert("Город для погоды", isPresented: $cityAsk) {
+                TextField("Например, Актобе", text: $cityDraft)
+                Button("Сохранить") {
+                    city = cityDraft.trimmed
+                    Task { await weather.load(force: true) }
+                }
+                Button("Отмена", role: .cancel) {}
+            } message: {
+                Text("По нему на главной показывается погода. Сменить город — в настройках, раздел «Оформление».")
+            }
             .task {
                 await weather.load()
                 issues = store.audit().count
-                await showBubble()
             }
-            .onChange(of: tab, initial: true) { _, t in if t == .home { Tilt.shared.start() } else { Tilt.shared.stop() } }
+            // пузырёк — когда главная уже видна: при запуске её закрывает заставка или окно входа
+            .task(id: shown) { if shown { await showBubble() } }
+            .onChange(of: store.state.changedAt) { _, _ in issues = store.audit().count }   // данные поправили
+            .onChange(of: tab, initial: true) { _, t in tilt(t == .home) }
+            .onDisappear { tilt(false) }          // смена темы пересоздаёт страницу — датчик за старой не оставляем
         }
         .onAppear { if ready { start() } }
         .onChange(of: ready) { _, r in if r { start() } }
@@ -103,8 +119,7 @@ struct HomeView: View {
 
     // ── дни рождения ────────────────────────────────────────────────────────
     /// Сегодня и в ближайшую неделю; нажатие — к сотрудникам.
-    @ViewBuilder private var birthdays: some View {
-        let list = store.birthdays(within: 7)
+    @ViewBuilder private func birthdays(_ list: [Birthday]) -> some View {
         if !list.isEmpty {
             Button { tab = .assets } label: {
                 HStack(alignment: .top, spacing: 12) {
@@ -148,6 +163,13 @@ struct HomeView: View {
         guard !shown else { return }
         shown = true
         grow = true
+    }
+
+    /// Датчик наклона — только пока главная на экране; свой счёт, чтобы не выключить его у открытой карточки.
+    private func tilt(_ on: Bool) {
+        guard on != tilting else { return }
+        tilting = on
+        if on { Tilt.shared.start() } else { Tilt.shared.stop() }
     }
 
     /// «Доброе утро, Иван»: имя — из «Ответственный» в почте для отчёта (Фамилия Имя — берём имя).
@@ -227,9 +249,12 @@ struct HomeView: View {
             Text("Отчёт за " + Dates.short(days[0]) + " – " + Dates.short(days[4]))
                 .font(.caption.weight(.semibold)).opacity(0.85)
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text("\(week.count)")
+                // число «докручивается» от нуля, когда главная открылась, и подпрыгивает при новой записи
+                Text("\(shown ? week.count : 0)")
                     .font(.system(size: 40, weight: .heavy, design: .rounded))
-                    .contentTransition(.numericText(value: Double(week.count)))
+                    .contentTransition(.numericText(value: Double(shown ? week.count : 0)))
+                    .animation(Motion.reduced ? nil : Animation.snappy(duration: 0.9).delay(0.3), value: shown)
+                    .modifier(Bump(value: week.count))
                 Text(plural(week.count, "запись", "записи", "записей")).font(.headline).opacity(0.85)
                 Spacer()
                 let streak = Streak.count
@@ -297,9 +322,9 @@ struct HomeView: View {
         let staff = working.count
         let bad = working.filter { trouble($0) > 0 }.count
         return HStack(spacing: 12) {
-            HomeTile(title: "Картриджи · " + HomeView.monthName.string(from: Date()), value: monthQty,
+            HomeTile(title: "Картриджи · " + HomeView.monthName.string(from: Date()), value: monthQty, counted: shown,
                      chip: weekQty > 0 ? "+\(weekQty) за неделю" : "за неделю 0", good: true) { tab = .carts }
-            HomeTile(title: "Сотрудники", value: staff,
+            HomeTile(title: "Сотрудники", value: staff, counted: shown,
                      chip: bad > 0 ? "\(bad) с замечаниями" : "всё исправно", good: bad == 0) { tab = .assets }
         }
     }
@@ -327,6 +352,8 @@ struct HomeView: View {
 private struct HomeTile: View {
     let title: String
     let value: Int
+    /// Главная открылась — число «докручивается» от нуля.
+    let counted: Bool
     let chip: String
     let good: Bool
     let action: () -> Void
@@ -335,10 +362,12 @@ private struct HomeTile: View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
-                Text("\(value)")
+                Text("\(counted ? value : 0)")
                     .font(.title.bold().monospacedDigit())
                     .foregroundStyle(.primary)
-                    .contentTransition(.numericText(value: Double(value)))
+                    .contentTransition(.numericText(value: Double(counted ? value : 0)))
+                    .animation(Motion.reduced ? nil : Animation.snappy(duration: 0.9).delay(0.45), value: counted)
+                    .modifier(Bump(value: value))
                 Text(chip)
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(good ? Color.green : Color.orange)
@@ -382,13 +411,27 @@ private struct QuickButton: View {
     }
 }
 
-private extension View {
-    /// Появление снизу с задержкой — карточки выезжают по очереди.
-    func rise(_ on: Bool, _ delay: Double) -> some View {
-        opacity(on ? 1 : 0)
-            .offset(y: on ? 0 : 22)
-            .scaleEffect(on ? 1 : 0.97)
-            .animation(.spring(response: 0.6, dampingFraction: 0.8).delay(delay), value: on)
+/// «Потяни вниз» на главной: робот показывается и крутится. Отдельным объектом: за ним следит только сам робот,
+/// а главная на каждый кадр прокрутки не пересчитывается (она считает дни рождения, неделю отчёта и плитки —
+/// прокрутка шла рывками).
+@MainActor @Observable
+final class Pull {
+    var y: CGFloat = 0
+    var armed = false
+    var spin = 0.0
+    var spinning = false
+}
+
+private struct PullBot: View {
+    let pull: Pull
+
+    var body: some View {
+        PixelBot(mood: pull.armed ? .happy : .idle)
+            .frame(width: 46, height: 46)
+            .rotationEffect(.degrees(pull.spin))
+            .opacity(pull.spinning ? 1 : Double(min(1, max(0, -pull.y / 70))))
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 
@@ -399,7 +442,11 @@ extension HomeView {
             Label {
                 Text(text).font(.subheadline.weight(.semibold))
             } icon: {
-                Image(systemName: weather.icon).symbolRenderingMode(.multicolor).symbolEffect(.bounce, value: text)
+                // значок живой: появился или обновили — подпрыгивает, а капли дождя и снежинки пробегают по нему
+                Image(systemName: weather.icon).symbolRenderingMode(.multicolor)
+                    .symbolEffect(.bounce, value: weatherTick)
+                    .symbolEffect(.variableColor.iterative, value: weatherTick)
+                    .onAppear { weatherTick += 1 }
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
             .glassEffect(.regular, in: Capsule())
@@ -408,6 +455,19 @@ extension HomeView {
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .glassEffect(.regular, in: Capsule())
                 .redacted(reason: .placeholder)
+        } else if city.trimmed.isEmpty {
+            // город не указан — погоды нет вовсе; подсказываем, где её включить
+            Button {
+                cityDraft = ""
+                cityAsk = true
+            } label: {
+                Label("Погода: указать город", systemImage: "cloud.sun.fill")
+                    .symbolRenderingMode(.multicolor)
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .glassEffect(.regular, in: Capsule())
+            }
+            .buttonStyle(PressStyle())
         }
     }
 
@@ -424,8 +484,7 @@ extension HomeView {
     }
 
     /// Сегодняшние именинники: «Поздравить» открывает WhatsApp с готовым текстом (номера нет — «Поделиться»).
-    @ViewBuilder var congrats: some View {
-        let today = store.birthdays(within: 0).filter { $0.days == 0 }
+    @ViewBuilder func congrats(_ today: [Birthday]) -> some View {
         if !today.isEmpty {
             VStack(spacing: 8) {
                 ForEach(today) { b in
@@ -526,24 +585,20 @@ extension HomeView {
             : Quotes.all[quote % Quotes.all.count]
     }
 
-    /// День рождения сегодня — шарики; Наурыз — тюльпаны; иначе — по сезону.
-    var fall: [String] {
-        store.birthdays(within: 0).contains { $0.days == 0 } ? ["🎈", "🎉"] : Fall.season
-    }
-
     func pulled(_ y: CGFloat) {
-        pullY = y
-        if y < -80 && !armed {
-            armed = true
-        } else if y > -10 && armed {
-            armed = false
-            spinning = true
-            withAnimation(.easeInOut(duration: 0.8)) { spin += 360 }
+        pull.y = y
+        if y < -80 && !pull.armed {
+            pull.armed = true
+        } else if y > -10 && pull.armed {
+            pull.armed = false
+            pull.spinning = true
+            withAnimation(.easeInOut(duration: 0.8)) { pull.spin += 360 }
             Task {
                 try? await Task.sleep(for: .seconds(0.9))
-                spinning = false
+                pull.spinning = false
             }
             withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) { quote += 1 }
+            weatherTick += 1
             Task { await weather.load(force: true) }
         }
     }

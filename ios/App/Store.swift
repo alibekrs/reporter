@@ -84,6 +84,11 @@ struct Summary {
     var byModel: [Top] = []
     /// заявки по месяцам — только в сводке за год
     var byMonth: [Int] = []
+    /// заявки по отделам (отдел — того, на кого записана заявка) и по устройствам — для графиков
+    var byEntryUnit: [Top] = []
+    var byDevice: [Top] = []
+    /// картриджи по месяцам — только в сводке за год
+    var cartsByMonth: [Int] = []
 
     struct Top: Identifiable {
         let name: String
@@ -133,6 +138,9 @@ struct Birthday: Identifiable {
     let days: Int
 }
 
+/// Очередь записи файла данных: одна на приложение, записи идут по порядку.
+private let storeDisk = DispatchQueue(label: "reporter.store.disk", qos: .userInitiated)
+
 /// Правила записи — как в модулях ITtool (assets.py, reports.py, cartridges.py).
 @MainActor
 final class Store: ObservableObject {
@@ -141,8 +149,6 @@ final class Store: ObservableObject {
     @Published private(set) var backingUp = false
     @Published private(set) var checking = false
     @Published var action: QuickAction?
-    /// Открыта вложенная карточка — листание страниц выключено, чтобы свайп «назад» работал как обычно.
-    @Published var lockPaging = false
     /// Сегодняшний день («2026-11-10»). Приложение живёт в памяти сутками, и страницы, открытые на «этой
     /// неделе» и «этом месяце», переходят на новые вслед за ним — иначе новая запись не видна в списке.
     @Published private(set) var today = Dates.text(Date())
@@ -152,6 +158,8 @@ final class Store: ObservableObject {
     @Published private(set) var restores = 0
     /// Растёт при каждом удалении: плашка «Удалено» отсчитывает своё время заново, даже если уже висит.
     @Published private(set) var deletions = 0
+    /// Растёт, когда отчёт ушёл начальнику: талисман радуется.
+    @Published private(set) var cheers = 0
     /// Файл не прочитался, и отложить его копию не вышло — поверх не пишем: это единственная копия данных.
     private var frozen = false
     /// Данные до последнего удаления — для кнопки «Вернуть» на плашке.
@@ -201,6 +209,9 @@ final class Store: ObservableObject {
         purgeTrash()
         syncReminders()
         Position.current = positions
+        // приложение закрывают — дописываем то, что ещё в очереди на диск
+        _ = NotificationCenter.default.addObserver(forName: UIApplication.willTerminateNotification, object: nil,
+                                                   queue: nil) { _ in storeDisk.sync {} }
     }
 
     static func newId() -> String { UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() }
@@ -209,11 +220,32 @@ final class Store: ObservableObject {
         [["id": .string(newId()), "name": .string("Филиал"), "parent_id": .null, "order": .number(0)]]
     }
 
+    /// Запись на диск — в своей очереди, строго по порядку: кодирование всех данных занимало десятки миллисекунд
+    /// на каждую правку, и экран на это время замирал. Сами данные — снимок на момент правки.
     private func persist() {
         guard !frozen else { return }
-        // данные — только в телефоне, поэтому пишем атомарно, чтобы сбой не оставил пол-файла
-        if let data = try? JSONEncoder().encode(state) {
-            try? data.write(to: file, options: [.atomic, .completeFileProtection])
+        let snapshot = state, url = file
+        storeDisk.async {
+            // данные — только в телефоне, поэтому пишем атомарно, чтобы сбой не оставил пол-файла
+            if let data = try? JSONEncoder().encode(snapshot) {
+                try? data.write(to: url, options: [.atomic, .completeFileProtection])
+            }
+        }
+    }
+
+    /// Дождаться записи на диск: приложение уходит в фон, где его могут выгрузить.
+    func flush() { storeDisk.sync {} }
+
+    private var remindersLater: Task<Void, Never>?
+
+    /// Напоминания — чуть позже и один раз на серию правок: расчёт дат по календарю и перезапись уведомлений
+    /// занимали десятки миллисекунд на каждое сохранение, и плашка «Сохранено» дёргалась.
+    private func syncRemindersSoon() {
+        remindersLater?.cancel()
+        remindersLater = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            self?.syncReminders()
         }
     }
 
@@ -224,7 +256,7 @@ final class Store: ObservableObject {
         withAnimation(.snappy) { apply(&state) }
         state.changedAt = Date()
         persist()
-        syncReminders()
+        syncRemindersSoon()
         Position.current = positions
         Badge.set(state.entries.reduce(0) { $0 + ($1.inWork == true ? 1 : 0) })
     }
@@ -253,8 +285,11 @@ final class Store: ObservableObject {
         if t != today {
             today = t
             purgeTrash()
+            syncReminders()                         // пятницы и ближайшие дни рождения считаются от сегодня
         }
     }
+
+    func cheer() { cheers += 1 }
 
     /// Дни рождения и концы гарантии — в напоминания (сами уведомления включаются в настройках).
     func syncReminders() {
@@ -881,13 +916,25 @@ final class Store: ObservableObject {
         let entries = state.entries.filter { $0.date.hasPrefix(prefix) }
         let carts = state.carts.filter { $0.issued_at.hasPrefix(prefix) }
         var who: [String: Int] = [:], what: [String: Int] = [:], units: [String: Int] = [:], models: [String: Int] = [:]
+        var entryUnits: [String: Int] = [:], devices: [String: Int] = [:]
+        let staff = everyone
+        let byId = Dictionary(staff.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let unitByFio = Dictionary(staff.map { ($0.fio.lowercased(), $0.unit) }, uniquingKeysWith: { a, _ in a })
+        let deviceById = Dictionary(allDevices.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         for e in entries {
             let person = (e.employee ?? "").trimmingCharacters(in: .whitespaces)
             let problem = (e.description ?? "").trimmingCharacters(in: .whitespaces)
-            if !person.isEmpty { who[person, default: 0] += 1 }
+            if !person.isEmpty {
+                who[person, default: 0] += 1
+                let unit = unitByFio[person.lowercased()] ?? ""
+                entryUnits[unit.isEmpty ? "Без отдела" : unit, default: 0] += 1
+            }
             if !problem.isEmpty { what[problem, default: 0] += 1 }
+            if let id = e.device, !id.isEmpty {
+                let name = deviceById[id].map { deviceTitle($0) + " — " + holderName($0.holder) } ?? "Устройство удалено"
+                devices[name, default: 0] += 1
+            }
         }
-        let byId = Dictionary(everyone.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         for c in carts {
             let unit = byId[c.employee_id ?? ""]?.unit ?? ""
             units[unit.isEmpty ? "Без отдела" : unit, default: 0] += c.qty
@@ -895,9 +942,15 @@ final class Store: ObservableObject {
         }
         var s = Summary(entries: entries.count, carts: carts.reduce(0) { $0 + $1.qty }, people: who.count,
                         byPerson: top(who), byProblem: top(what), byUnit: top(units), byModel: top(models))
-        if prefix.count == 4 {                             // год: заявки по месяцам
+        // один столбик «Без отдела» ничего не говорит — график по отделам нужен, когда отделов несколько
+        if entryUnits.count > 1 || entryUnits["Без отдела"] == nil { s.byEntryUnit = top(entryUnits) }
+        s.byDevice = top(devices)
+        if prefix.count == 4 {                             // год: заявки и картриджи по месяцам
             s.byMonth = (1...12).map { m in
                 entries.filter { $0.date.dropFirst(5).hasPrefix(String(format: "%02d", m)) }.count
+            }
+            s.cartsByMonth = (1...12).map { m in
+                carts.filter { $0.issued_at.dropFirst(5).hasPrefix(String(format: "%02d", m)) }.reduce(0) { $0 + $1.qty }
             }
         }
         return s

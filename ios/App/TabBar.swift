@@ -32,8 +32,8 @@ struct GlassTabBar: View {
     @AppStorage(Theme.key) private var palette = Theme.defaultID       // смена темы перекрашивает панель
 
     let selection: AppTab
-    /// 0…4 — где сейчас прокрутка страниц
-    let progress: CGFloat
+    /// где сейчас прокрутка страниц (0…4)
+    let pager: Pager
     let onSelect: (AppTab) -> Void
 
     @Environment(\.colorScheme) private var scheme
@@ -44,6 +44,8 @@ struct GlassTabBar: View {
     private let tabs = AppTab.allCases
 
     var body: some View {
+        // читаем здесь, а не в замыкании ниже: так панель точно следит за прокруткой страниц
+        let progress = pager.progress
         GeometryReader { geo in
             let w = geo.size.width / CGFloat(tabs.count)
             let page = min(max(progress, 0), CGFloat(tabs.count - 1))

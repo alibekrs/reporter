@@ -219,7 +219,9 @@ final class Tour {
         }
         shot("device-filled")
         tapBarButton("Тестов 01", "Сохранить")
-        pause(1)
+        pause(0.3)
+        shot("save-check")                                    // «Сохранить» на секунду стала галочкой
+        pause(0.9)
         let historyButton = app.buttons.matching(NSPredicate(format: "label == %@", "История и передача"))
         var hist = reveal(historyButton, tries: 4)
         if hist == nil, let p = reveal(row, fromTop: true, tries: 16) {   // после сохранения принтер свернулся
@@ -292,7 +294,7 @@ final class Tour {
             return
         }
         let header = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "возраст техники"))
-        _ = reveal(header, tries: 6)
+        _ = reveal(header, tries: 12)
         XCTAssertTrue(header.firstMatch.exists, "Сводка: нет возраста техники")
         shot("summary-fleet")
         tapBarButton("Сводка", "Закрыть")
@@ -332,6 +334,12 @@ final class Tour {
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "ДЕНЬ РОЖДЕНИЯ СЕГОДНЯ")).firstMatch
             .waitForExistence(timeout: 4), "Главная: нет карточки дня рождения")
         shot("home-birthday")
+        open("Учёт")
+        let cake = NSPredicate(format: "label CONTAINS %@ AND (label CONTAINS %@ OR label CONTAINS %@)",
+                               "Иванов Иван Петрович", "день рождения сегодня", "🎂")
+        XCTAssertNotNil(reveal(app.buttons.matching(cake), fromTop: true, tries: 6),
+                        "Учёт: у именинника нет отметки дня рождения")
+        shot("assets-birthday")
     }
 
     /// Чек-лист нового сотрудника: отметить пункты и записать сделанное в отчёт.

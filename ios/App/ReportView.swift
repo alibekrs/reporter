@@ -2,6 +2,8 @@ import SwiftUI
 
 struct ReportView: View {
     @EnvironmentObject private var store: Store
+    @Environment(\.pageActive) private var active
+    @State private var entered = false         // вкладку уже открывали — карточка недели выехала
     @State private var day = Date()
     @State private var editing: Entry?
     @State private var toast: String?
@@ -56,6 +58,7 @@ struct ReportView: View {
             .overlay { Confetti(trigger: party) }
             .toast($toast) { if store.undoDelete() { toast = "Возвращено" } }
         }
+        .onChange(of: active, initial: true) { _, on in if on { entered = true } }
     }
 
     /// Собрать Word за показанную неделю и открыть его: проверить перед отправкой и передать через «Поделиться».
@@ -87,6 +90,7 @@ struct ReportView: View {
         do {
             toast = try await ReportMail.send(MailSettings.load(), monday: monday, entries: store.reportEntries(week: monday))
             party += 1                             // конфетти и самолётик: отчёт ушёл
+            store.cheer()                          // и талисман радуется
             Feel.sent()
             Reminder.sent(monday)                  // отчёт ушёл — пятничное напоминание за эту неделю не нужно
         } catch { self.error = error.localizedDescription }
@@ -131,6 +135,7 @@ struct ReportView: View {
             } else {
                 Section {
                     weekCard(count: week.count)
+                        .rise(entered)
                         .listRowInsets(EdgeInsets())
                         .listRowBackground(Color.clear)
                 }

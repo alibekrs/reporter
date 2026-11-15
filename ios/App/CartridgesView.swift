@@ -2,6 +2,8 @@ import SwiftUI
 
 struct CartridgesView: View {
     @EnvironmentObject private var store: Store
+    @Environment(\.pageActive) private var active
+    @State private var entered = false                         // вкладку уже открывали — карточки выехали
     @State private var year = Dates.yearMonth(Date()).year
     @State private var month = Dates.yearMonth(Date()).month   // 0 — весь год
     @State private var query = ""
@@ -27,6 +29,7 @@ struct CartridgesView: View {
             }
             .toast($toast) { if store.undoDelete() { toast = "Возвращено" } }
         }
+        .onChange(of: active, initial: true) { _, on in if on { entered = true } }
     }
 
     /// Показать период, в который попадает день: его месяц, а если открыт «Год» — его год.
@@ -41,10 +44,12 @@ struct CartridgesView: View {
         return List {
             Section {
                 periodPicker
+                    .rise(entered)
                     .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)                  // иначе над карточкой торчит линия от «2026»
                 summaryCard(data.items, label: data.label)
+                    .rise(entered, 0.08)
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)

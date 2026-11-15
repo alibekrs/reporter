@@ -22,6 +22,9 @@ struct AssetsView: View {
     static let networkPath = "network"
 
     @EnvironmentObject private var store: Store
+    @Environment(Pager.self) private var pager
+    @Environment(\.pageActive) private var active
+    @State private var entered = false               // вкладку уже открывали — карточки выехали
     @State private var query = ""
     @State private var path: [String] = []
     @State private var draft: Dict?
@@ -49,7 +52,8 @@ struct AssetsView: View {
             }
             .toast($toast) { if store.undoDelete() { toast = "Возвращено" } }
         }
-        .onChange(of: path) { _, p in store.lockPaging = !p.isEmpty }
+        .onChange(of: path) { _, p in pager.cardOpen = !p.isEmpty }
+        .onChange(of: active, initial: true) { _, on in if on { entered = true } }
         .sheet(item: $favDevice) { d in DeviceSheet(deviceId: d.id).presentationCornerRadius(24) }
         .onChange(of: store.restores) { _, _ in path = [] }     // данные заменили — карточка держала старые
     }
@@ -69,6 +73,7 @@ struct AssetsView: View {
         let all = groups.flatMap(\.emps)
         let stock = store.devices(of: "").count
         let fired = store.dismissed(matching: query)
+        let party = Set(store.birthdays(within: 0).map(\.id))      // у кого сегодня день рождения
         return List {
             Section {
                 HStack(spacing: 10) {
@@ -79,15 +84,33 @@ struct AssetsView: View {
                     StatCard(title: "с проблемой", value: all.filter { trouble($0) > 0 }.count,
                              icon: "exclamationmark.triangle.fill", color: .orange)
                 }
+                .rise(entered)
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
+            }
+            // сеть — сразу под цифрами: в конце длинного списка сотрудников её не находили
+            if query.isEmpty {
+                Section {
+                    NavigationLink(value: AssetsView.networkPath) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "network").font(.title3).foregroundStyle(Brand.blue).frame(width: 40, height: 40)
+                            Text("Сеть")
+                            Spacer()
+                            Text("\(store.state.network.count)").monospacedDigit().foregroundStyle(.secondary)
+                        }
+                    }
+                } footer: {
+                    Text("Роутеры, коммутаторы, точки Wi-Fi, серверы, камеры: IP, MAC, логины и пароли.")
+                }
             }
             // избранное — сверху: закреплённые сотрудники и устройства
             let favs = store.favorites, favDevs = store.favoriteDevices
             if query.isEmpty && !(favs.isEmpty && favDevs.isEmpty) {
                 Section("Избранное") {
                     ForEach(favs, id: \.["id"]) { e in
-                        NavigationLink(value: e["id"]?.string ?? "") { EmployeeRow(e: e) }
+                        NavigationLink(value: e["id"]?.string ?? "") {
+                            EmployeeRow(e: e, birthday: party.contains(e["id"]?.string ?? ""))
+                        }
                     }
                     ForEach(favDevs) { d in
                         Button { favDevice = d } label: {
@@ -106,7 +129,7 @@ struct AssetsView: View {
                 Section {
                     ForEach(g.emps, id: \.["id"]) { e in
                         let id = e["id"]?.string ?? ""
-                        NavigationLink(value: id) { EmployeeRow(e: e) }
+                        NavigationLink(value: id) { EmployeeRow(e: e, birthday: party.contains(id)) }
                             .matchedTransitionSource(id: id, in: zoom)
                     }
                 } header: {
@@ -117,20 +140,6 @@ struct AssetsView: View {
                             .padding(.horizontal, 7).padding(.vertical, 1)
                             .background(Brand.blue.opacity(0.15), in: Capsule())
                     }
-                }
-            }
-            if query.isEmpty {
-                Section {
-                    NavigationLink(value: AssetsView.networkPath) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "network").font(.title3).foregroundStyle(Brand.blue).frame(width: 40, height: 40)
-                            Text("Сеть")
-                            Spacer()
-                            Text("\(store.state.network.count)").monospacedDigit().foregroundStyle(.secondary)
-                        }
-                    }
-                } footer: {
-                    Text("Роутеры, коммутаторы, точки Wi-Fi, серверы, камеры: IP, MAC, логины и пароли.")
                 }
             }
             if stock > 0 && query.isEmpty {
@@ -245,6 +254,8 @@ struct Avatar: View {
 
 struct EmployeeRow: View {
     let e: Dict
+    /// День рождения сегодня: торт у имени, по строке пробегает блик.
+    var birthday = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -255,6 +266,7 @@ struct EmployeeRow: View {
                     if e["is_head"]?.bool == true {
                         Image(systemName: "star.fill").font(.caption2).foregroundStyle(Brand.sun)
                     }
+                    if birthday { Text("🎂").font(.footnote).accessibilityLabel("день рождения сегодня") }
                 }
                 if !subtitle.isEmpty {
                     Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(2)
@@ -276,6 +288,7 @@ struct EmployeeRow: View {
             }
         }
         .padding(.vertical, 2)
+        .modifier(Shine(on: birthday))
     }
 
     private var subtitle: String {
@@ -302,6 +315,8 @@ struct EmployeeView: View {
     @State private var error: String?
     @State private var appeared = false
     @State private var shine = false
+    @State private var saved = false                 // «Сохранить» на секунду стала галочкой
+    @State private var birthday = false
 
     init(initial: Dict, meta: Meta, onSaved: @escaping (String) -> Void) {
         _emp = State(initialValue: initial)
@@ -322,6 +337,9 @@ struct EmployeeView: View {
                         Text(Store.fio(emp)).font(.headline).contentTransition(.opacity)
                         Text(store.units.first { $0.id == emp["unit_id"]?.string }?.path ?? "")
                             .font(.caption).foregroundStyle(.secondary)
+                        if birthday {
+                            Text("🎂 Сегодня день рождения").font(.caption.weight(.bold)).foregroundStyle(Brand.gold)
+                        }
                         if Store.isDismissed(emp) {
                             Text("Уволен \(Readable.date(emp["dismissed"]?.string ?? ""))")
                                 .font(.caption.weight(.bold)).foregroundStyle(.orange)
@@ -331,10 +349,20 @@ struct EmployeeView: View {
                         filled
                     }
                 }
-                .padding(.vertical, 4)
-                .overlay { HoloSheen().clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous)) }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                // шапка — «коллекционная» карточка: по ней бежит радужный отлив за наклоном телефона
+                // (на прозрачной строке отлива не было видно)
+                .background(Brand.blue.opacity(0.14))
+                .overlay { HoloSheen() }
+                .modifier(Shine(on: birthday))
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
-                .onAppear { appeared = true }
+                .onAppear {
+                    appeared = true
+                    checkBirthday()
+                }
             }
             onboarding
             if !isNew { history }
@@ -410,7 +438,17 @@ struct EmployeeView: View {
                 let wasNew = isNew
                 emp = store.saveEmployee(emp)
                 onSaved(wasNew ? "Сотрудник добавлен" : "Сохранено")
-            } label: { Text("Сохранить").bold() }
+                checkBirthday()
+                flashSaved()
+            } label: {
+                // «Сохранить» на секунду превращается в галочку и обратно
+                ZStack {
+                    Text("Сохранить").bold().opacity(saved ? 0 : 1)
+                    Image(systemName: "checkmark.circle.fill").font(.title3).foregroundStyle(.green)
+                        .scaleEffect(saved ? 1 : 0.3).opacity(saved ? 1 : 0)
+                }
+            }
+            .accessibilityLabel("Сохранить")
         }
         .confirmationDialog("Удалить сотрудника и всю его технику?", isPresented: $confirmDelete,
                             titleVisibility: .visible) {
@@ -442,6 +480,19 @@ struct EmployeeView: View {
             DeviceSheet(deviceId: d.id).presentationCornerRadius(24)
         }
         .errorAlert($error)
+    }
+
+    private func checkBirthday() {
+        birthday = store.birthdays(within: 0).contains { $0.id == id }
+    }
+
+    private func flashSaved() {
+        guard !Motion.reduced else { return }
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { saved = true }
+        Task {
+            try? await Task.sleep(for: .seconds(1.1))
+            withAnimation(.easeOut(duration: 0.25)) { saved = false }
+        }
     }
 
     /// Насколько заполнена карточка: полоска; на 100% по ней пробегает блик.

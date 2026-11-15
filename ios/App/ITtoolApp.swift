@@ -11,18 +11,42 @@ struct ITtoolApp: App {
     }
 }
 
+/// Лента страниц. Отдельным объектом, а не в данных: за прокруткой следит только нижняя панель, за открытой
+/// карточкой — только главный экран. Раньше на каждый кадр листания пересчитывался главный экран (с ним заново
+/// рисовались панель, талисман и его «жидкие» капли), а на открытие карточки — все пять страниц.
+@MainActor @Observable
+final class Pager {
+    /// Где сейчас прокрутка страниц (0…4) — по ней едет линза панели.
+    var progress: CGFloat = 0
+    /// В «Учёте» открыта карточка сотрудника: листание страниц выключено, чтобы свайп «назад» закрывал её.
+    var cardOpen = false
+}
+
+private struct PageActiveKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    /// Страница сейчас на экране (а не рядом в ленте): её верхние карточки выезжают при первом открытии.
+    var pageActive: Bool {
+        get { self[PageActiveKey.self] }
+        set { self[PageActiveKey.self] = newValue }
+    }
+}
+
 struct RootView: View {
     @EnvironmentObject private var store: Store
     @Environment(\.scenePhase) private var phase
     @AppStorage("theme") private var theme = 0
     @State private var tab = AppTab.home
     @State private var page: AppTab? = .home        // какая страница сейчас в прокрутке
-    @State private var progress: CGFloat = 0        // 0…4: положение прокрутки в страницах — по нему едет линза
+    @State private var pager = Pager()
     // открыли быстрым действием с иконки — сразу к делу, без заставки. Со входом заставки тоже нет: её роль
     // играет экран входа, а 4 секунды заставки под ним добавлялись к Face ID — приложение открывалось долго
     @State private var splash = SceneDelegate.pending == nil && !LockScreen.shared.locked
-    // заставка раскрывается — карточки главной выезжают
-    @State private var revealed = SceneDelegate.pending != nil || LockScreen.shared.locked
+    // заставка раскрывается — карточки главной выезжают. Со входом — когда окно входа ушло: под ним
+    // ни карточек, ни падающих листьев не было видно
+    @State private var revealed = SceneDelegate.pending != nil && !LockScreen.shared.locked
     @State private var keyboard = false             // клавиатура на экране — панель и талисман прячутся
     @AppStorage(Theme.key) private var palette = Theme.defaultID
     @State private var menu = false                 // открыто меню талисмана
@@ -34,6 +58,7 @@ struct RootView: View {
     @State private var failure: String?
 
     var body: some View {
+        let cardOpen = self.cardOpen                // читаем здесь: главный экран следит за открытой карточкой
         // размер страниц задаём явно: с containerRelativeFrame лента вылезала за экран и панель уезжала вниз
         GeometryReader { geo in
             // страницы рядом в одну ленту: листаются пальцем в любом месте экрана, как в Instagram;
@@ -55,12 +80,13 @@ struct RootView: View {
             .onScrollGeometryChange(for: CGFloat.self) { g in
                 g.containerSize.width > 0 ? g.contentOffset.x / g.containerSize.width : 0
             } action: { _, p in
-                progress = p
+                pager.progress = p
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
         // смена темы: страницы пересоздаются в новых цветах (вкладка остаётся та же)
         .id(palette)
+        .environment(pager)
         .background(AppBackground())
         .overlay {
             // открыто меню талисмана — страницы притушены, нажатие мимо закрывает
@@ -74,7 +100,7 @@ struct RootView: View {
         .overlay(alignment: .bottom) {
             ZStack(alignment: .bottomTrailing) {
                 // при клавиатуре панель и талисман прячутся: страницы сжимаются над ней, и панель закрывала поля
-                GlassTabBar(selection: tab, progress: progress) { t in
+                GlassTabBar(selection: tab, pager: pager) { t in
                     go(t)
                 }
                 .padding(.horizontal, 16)
@@ -84,7 +110,8 @@ struct RootView: View {
                 .accessibilityHidden(keyboard)
                 if plane { flyingPlane }
                 // талисман вместо «+» — на всех вкладках, над панелью; над карточкой сотрудника его нет
-                MascotMenu(open: $menu, shown: !keyboard && !cardOpen, celebrate: celebrate) { act($0) }
+                MascotMenu(open: $menu, shown: !keyboard && !cardOpen, celebrate: celebrate, busy: store.backingUp,
+                           greet: revealed) { act($0) }
                     .padding(.trailing, 14)
                     .padding(.bottom, 2 + GlassTabBar.height + 8)
             }
@@ -119,15 +146,16 @@ struct RootView: View {
         .task(id: phase) {
             guard phase == .active else { return }
             store.refreshToday()                  // приложение могло пролежать в памяти до нового дня
-            store.syncReminders()
             applyTheme(theme)
             await store.backup()                  // по расписанию, при открытии приложения
             await store.verifyBackup()            // раз в месяц: последний бэкап читается
         }
         .onChange(of: phase, initial: true) { _, p in
-            // вход: в фоне — закрыть, на экране — спросить Face ID; не на экране — данные не видны
+            // вход: вернулись — спросить Face ID (значок для переключателя приложений LockScreen ставит сам)
             LockScreen.shared.scene(p)
-            guard p == .background, store.backupDue else { return }
+            guard p == .background else { return }
+            store.flush()                         // данные — на диск: в фоне приложение могут выгрузить
+            guard store.backupDue else { return }
             // бэкап «после изменений» уходит, когда приложение сворачивают: просим у системы время доотправить
             let app = UIApplication.shared, box = BackgroundTaskBox()
             box.id = app.beginBackgroundTask(withName: "REPORTER backup") {
@@ -135,6 +163,7 @@ struct RootView: View {
             }
             Task {
                 await store.backup()
+                store.flush()                     // отметка о бэкапе — тоже на диск до конца фонового времени
                 app.endBackgroundTask(box.id)
             }
         }
@@ -142,8 +171,12 @@ struct RootView: View {
             store.refreshToday()                  // полночь при открытом приложении
         }
         .onReceive(NotificationCenter.default.publisher(for: SceneDelegate.arrived)) { _ in shortcut() }
+        .onReceive(NotificationCenter.default.publisher(for: LockScreen.opened)) { _ in revealed = true }
         .task { shortcut() }                      // приложение открыли быстрым действием с иконки
         .onChange(of: theme) { _, t in applyTheme(t) }
+        // бэкап ушёл — самолётик улетает: из меню талисмана, из настроек или сам по расписанию
+        .onChange(of: store.state.lastBackup) { _, sent in if sent != nil { fly() } }
+        .onChange(of: store.cheers) { _, _ in cheer() }       // отчёт ушёл начальнику — талисман радуется
         .errorAlert($store.loadError)
     }
 
@@ -168,7 +201,7 @@ struct RootView: View {
     }
 
     /// На экране «Учёт» с открытой карточкой сотрудника. Другие страницы при этом листаются как обычно.
-    private var cardOpen: Bool { store.lockPaging && tab == .assets }
+    private var cardOpen: Bool { pager.cardOpen && tab == .assets }
 
     /// Размер текста внутри приложения: 0 — как в системе, дальше — мелкий, обычный, крупный, очень крупный.
     static func typeSizes(_ level: Int) -> ClosedRange<DynamicTypeSize> {
@@ -188,18 +221,9 @@ struct RootView: View {
         }
     }
 
-    /// Бэкап из меню: самолётик улетает, по итогу — плашка и радость талисмана или понятная ошибка.
+    /// Бэкап из меню: пока уходит, талисман держит блокнот; по итогу — плашка и радость талисмана (самолётик
+    /// улетает сам, когда бэкап ушёл) или понятная ошибка.
     private func sendBackup() {
-        if !Motion.reduced {
-            plane = true
-            Task {
-                try? await Task.sleep(for: .milliseconds(30))
-                withAnimation(.easeIn(duration: 0.9)) { planeGo = true }
-                try? await Task.sleep(for: .seconds(1))
-                plane = false
-                planeGo = false
-            }
-        }
         Task {
             await store.backup(force: true)
             let s = store.backupStatus ?? ""
@@ -208,7 +232,26 @@ struct RootView: View {
                 return
             }
             note = s
-            celebrate = true
+            cheer()
+        }
+    }
+
+    private func fly() {
+        guard !Motion.reduced, !plane else { return }
+        plane = true
+        Task {
+            try? await Task.sleep(for: .milliseconds(30))
+            withAnimation(.easeIn(duration: 0.9)) { planeGo = true }
+            try? await Task.sleep(for: .seconds(1))
+            plane = false
+            planeGo = false
+        }
+    }
+
+    /// Талисман радуется пару секунд.
+    private func cheer() {
+        celebrate = true
+        Task {
             try? await Task.sleep(for: .seconds(2))
             celebrate = false
         }
@@ -232,6 +275,7 @@ struct RootView: View {
         content()
             .frame(width: size.width, height: size.height)
             .id(t)
+            .environment(\.pageActive, tab == t && revealed)
     }
 }
 
@@ -240,13 +284,18 @@ final class BackgroundTaskBox: @unchecked Sendable {
     var id = UIBackgroundTaskIdentifier.invalid
 }
 
-/// Тема для всего окна: 0 — как в системе, 1 — светлая, 2 — тёмная.
+/// Светлая или тёмная тема окна (t: 0 — как в системе, 1 — светлая, 2 — тёмная). Лаванда всегда светлая,
+/// OLED и Матрица — тёмные. Так же красятся окно входа и значок для переключателя приложений.
+@MainActor
+func windowStyle(_ t: Int) -> UIUserInterfaceStyle {
+    let forced = Theme.current.scheme
+    return forced == .light ? .light : forced == .dark ? .dark : (t == 1 ? .light : (t == 2 ? .dark : .unspecified))
+}
+
+/// Тема для всех окон приложения.
 @MainActor
 func applyTheme(_ t: Int) {
-    // Лаванда всегда светлая, OLED и Матрица — тёмные, остальные — как выбрано: авто, светлая, тёмная
-    let forced = Theme.current.scheme
-    let style: UIUserInterfaceStyle = forced == .light ? .light : forced == .dark ? .dark
-        : (t == 1 ? .light : (t == 2 ? .dark : .unspecified))
+    let style = windowStyle(t)
     for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
         for w in scene.windows { w.overrideUserInterfaceStyle = style }
     }
@@ -268,6 +317,7 @@ enum Brand {
 // ── настройки ───────────────────────────────────────────────────────────────
 struct SettingsView: View {
     @EnvironmentObject private var store: Store
+    @Environment(\.pageActive) private var active
     @AppStorage("theme") private var theme = 0
     @State private var botToken = ""
     @State private var chat = ""
@@ -618,7 +668,10 @@ struct SettingsView: View {
                 botToken = store.state.backupToken
                 chat = store.state.backupChat
                 backupPassword = Keychain.get(BackupCrypto.passwordKey)
-                withAnimation(.spring(response: 0.6, dampingFraction: 0.6)) { appeared = true }
+            }
+            // значок вырастает, когда вкладку открыли: все страницы появляются сразу при запуске, под заставкой
+            .onChange(of: active, initial: true) { _, on in
+                if on && !appeared { withAnimation(.spring(response: 0.6, dampingFraction: 0.6)) { appeared = true } }
             }
             .task(id: backupPassword) {
                 do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
@@ -997,7 +1050,6 @@ struct StatCard: View {
     let value: Int
     let icon: String
     let color: Color
-    @State private var bump = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -1006,15 +1058,7 @@ struct StatCard: View {
             Text("\(value)")
                 .font(.title2.bold().monospacedDigit())
                 .contentTransition(.numericText(value: Double(value)))
-                .scaleEffect(bump ? 1.18 : 1, anchor: .leading)
-                .onChange(of: value) {
-                    guard !Motion.reduced else { return }
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.5)) { bump = true }
-                    Task {
-                        try? await Task.sleep(for: .milliseconds(220))
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { bump = false }
-                    }
-                }
+                .modifier(Bump(value: value))
             Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
