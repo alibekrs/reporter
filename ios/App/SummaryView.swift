@@ -172,10 +172,14 @@ struct SummaryView: View {
     /// Подписи оси наезжали на столбики и перечёркивались сеткой — ось спрятана, название стоит над столбиком.
     @ViewBuilder private func chart(_ title: String, _ items: [Summary.Top], _ color: Color) -> some View {
         if !items.isEmpty {
+            // grown читаем здесь, а не в замыкании Chart: оно считается вне body, и экран не замечал смену grown —
+            // столбики оставались нулевыми, пока экран не перестроится (например, переключением на «Год»)
+            let full = grown
+            let most = max(items.map(\.count).max() ?? 1, 1)
             VStack(alignment: .leading, spacing: 6) {
                 Text(title).font(.subheadline.weight(.semibold))
                 Chart(items) { t in
-                    BarMark(x: .value("Сколько", grown ? t.count : 0), y: .value("Что", t.name), height: .fixed(12))
+                    BarMark(x: .value("Сколько", full ? t.count : 0), y: .value("Что", t.name), height: .fixed(12))
                         .foregroundStyle(color.gradient)
                         .cornerRadius(6)
                         .annotation(position: .top, alignment: .leading, spacing: 2) {
@@ -183,6 +187,9 @@ struct SummaryView: View {
                         }
                         .annotation(position: .trailing) { Text("\(t.count)").font(.caption2).foregroundStyle(.secondary) }
                 }
+                // ноль слева с первого кадра (у нулевых столбиков шкала ставила ноль посередине, и подписи ехали влево);
+                // справа место под число у самого длинного столбика
+                .chartXScale(domain: 0...most, range: .plotDimension(endPadding: 24))
                 .chartXAxis(.hidden)
                 .chartYAxis(.hidden)
                 .frame(height: CGFloat(items.count) * 48)

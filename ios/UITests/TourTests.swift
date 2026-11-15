@@ -113,6 +113,7 @@ final class Tour {
             b.tap()
             pause(1.5)
             shot(name)
+            if name == "profile" { scratchFoil() }
             tidy()
             pause(0.8)
         }
@@ -912,6 +913,20 @@ final class Tour {
         shot("employee-history")
         card.buttons.element(boundBy: 0).tap()                // «назад» к списку
         pause(1)
+    }
+
+    /// Новую медаль стирают пальцем: после короткого мазка по фольге должна появиться стёртая полоса.
+    /// Мазок короткий (меньше 40 точек) — медаль ещё не открывается, на снимке видно, что фольга перерисовывается.
+    private func scratchFoil() {
+        let medal = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Достижение: Первая заявка")).firstMatch
+        guard medal.exists && medal.isHittable else { return }       // медаль уже открыта раньше — стирать нечего
+        // круг 72×72 — сверху по центру карточки медали, под ним подпись
+        let mid = medal.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: medal.frame.width / 2, dy: 36))
+        mid.withOffset(CGVector(dx: -20, dy: 0))
+            .press(forDuration: 0.05, thenDragTo: mid.withOffset(CGVector(dx: 20, dy: 0)), withVelocity: .slow, thenHoldForDuration: 0)
+        pause(0.5)
+        shot("profile-foil")
     }
 
     /// Сводка за месяц и за год с главной.

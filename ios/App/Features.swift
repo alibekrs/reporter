@@ -298,10 +298,13 @@ struct Foil: ViewModifier {
                                startPoint: .topLeading, endPoint: .bottomTrailing)
                     .overlay(Text("сотри").font(.caption2.weight(.heavy)).foregroundStyle(.white.opacity(0.9)))
                     .mask {
+                        // точки читаем здесь: замыкание Canvas считается при рисовании, вне body, и новые точки
+                        // не перерисовывали фольгу — стёртое не было видно до самого открытия медали
+                        let pts = points
                         Canvas { ctx, size in
                             ctx.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.black))
                             ctx.blendMode = .clear
-                            for p in points {
+                            for p in pts {
                                 ctx.fill(Path(ellipseIn: CGRect(x: p.x - 13, y: p.y - 13, width: 26, height: 26)), with: .color(.black))
                             }
                         }
