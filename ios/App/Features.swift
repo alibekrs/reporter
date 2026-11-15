@@ -145,17 +145,62 @@ enum Streak {
 final class Weather: ObservableObject {
     static let shared = Weather()
     static let cityKey = "weather.city"
-    @Published var text: String?
-    @Published var icon = "cloud.fill"
+    /// Что показывает карточка. nil — ещё не загружено, города нет или нет связи.
+    @Published var now: Sky?
+    /// «Город не найден» — карточка предлагает сменить город.
+    @Published var problem: String?
     @Published var loading = false
     private var at = Date.distantPast
     private var place = ""
 
-    /// Раз в полчаса или по запросу. Нет сети — карточки просто нет.
+    struct Sky: Equatable {
+        enum Kind { case clear, cloudy, fog, rain, snow, storm }
+        var temp: Int, hi: Int, lo: Int
+        var wind: Int                      // м/с
+        var kind: Kind
+        var word: String                   // «дождь»
+        var day: Bool
+        var season: Season
+        var place: String
+
+        /// Ночь и гроза — картинка тёмная, текст на ней белый.
+        var dark: Bool { !day || kind == .storm }
+
+        var tip: String {
+            switch kind {
+            case .storm: return "⚡ Гроза — держите технику на ИБП"
+            case .rain: return temp <= 1 ? "🧊 Гололёд — выходите пораньше" : "☂️ Возьмите зонт"
+            case .snow: return "❄️ Снегопад — на дорогу больше времени"
+            case .fog: return "🌫 Туман — осторожно за рулём"
+            case .clear, .cloudy: break
+            }
+            if wind >= 14 { return "💨 Сильный ветер" }
+            if temp >= 28 { return "🥤 Жарко — пейте воду" }
+            if temp <= -15 { return "🧣 Мороз — одевайтесь теплее" }
+            if temp <= 0 { return "🧣 Одевайтесь теплее" }
+            return day ? "🙂 Хорошая погода" : "🌙 Хорошего вечера"
+        }
+
+        /// Картинка без данных: город не указан или погода ещё грузится — сезон и время суток сегодняшние.
+        static func placeholder() -> Sky {
+            let h = Calendar.current.component(.hour, from: Date())
+            return Sky(temp: 0, hi: 0, lo: 0, wind: 3, kind: .clear, word: "", day: (6..<20).contains(h),
+                       season: Season.of(Date()), place: "")
+        }
+    }
+
+    /// Раз в полчаса или по запросу. Нет сети — остаётся прошлое.
     func load(force: Bool = false) async {
+        #if DEBUG
+        if Self.demo {
+            now = Self.demos[demoIndex]
+            return
+        }
+        #endif
         let city = (UserDefaults.standard.string(forKey: Self.cityKey) ?? "").trimmingCharacters(in: .whitespaces)
         guard !city.isEmpty else {
-            text = nil
+            now = nil
+            problem = nil
             return
         }
         guard force || city != place || Date().timeIntervalSince(at) > 1800, !loading else { return }
@@ -166,8 +211,10 @@ final class Weather: ObservableObject {
             let results: [R]?
         }
         struct Now: Decodable {
-            struct C: Decodable { let temperature_2m: Double; let weather_code: Int }
+            struct C: Decodable { let temperature_2m: Double; let weather_code: Int; let wind_speed_10m: Double; let is_day: Int }
+            struct D: Decodable { let temperature_2m_max: [Double]; let temperature_2m_min: [Double] }
             let current: C
+            let daily: D
         }
         do {
             var g = URLComponents(string: "https://geocoding-api.open-meteo.com/v1/search")!
@@ -175,21 +222,30 @@ final class Weather: ObservableObject {
                             URLQueryItem(name: "language", value: "ru")]
             let (gd, _) = try await URLSession.shared.data(from: g.url!)
             guard let r = try JSONDecoder().decode(Geo.self, from: gd).results?.first else {
-                text = "Город «\(city)» не найден"
-                icon = "questionmark.circle"
+                now = nil
+                problem = "Город «\(city)» не найден"
+                place = city
+                at = Date()
                 return
             }
             var f = URLComponents(string: "https://api.open-meteo.com/v1/forecast")!
             f.queryItems = [URLQueryItem(name: "latitude", value: String(r.latitude)),
                             URLQueryItem(name: "longitude", value: String(r.longitude)),
-                            URLQueryItem(name: "current", value: "temperature_2m,weather_code"),
+                            URLQueryItem(name: "current", value: "temperature_2m,weather_code,wind_speed_10m,is_day"),
+                            URLQueryItem(name: "daily", value: "temperature_2m_max,temperature_2m_min"),
+                            URLQueryItem(name: "wind_speed_unit", value: "ms"),
+                            URLQueryItem(name: "forecast_days", value: "1"),
                             URLQueryItem(name: "timezone", value: "auto")]
             let (wd, _) = try await URLSession.shared.data(from: f.url!)
-            let c = try JSONDecoder().decode(Now.self, from: wd).current
+            let n = try JSONDecoder().decode(Now.self, from: wd)
+            let c = n.current
             let t = Int(c.temperature_2m.rounded())
-            let d = Self.describe(c.weather_code)
-            icon = d.icon
-            text = "\(t > 0 ? "+" : "")\(t)° · \(d.word) · \(r.name)"
+            now = Sky(temp: t,
+                      hi: n.daily.temperature_2m_max.first.map { Int($0.rounded()) } ?? t,
+                      lo: n.daily.temperature_2m_min.first.map { Int($0.rounded()) } ?? t,
+                      wind: Int(c.wind_speed_10m.rounded()), kind: Self.kind(c.weather_code), word: Self.word(c.weather_code),
+                      day: c.is_day == 1, season: Season.of(Date()), place: r.name)
+            problem = nil
             at = Date()
             place = city
         } catch {
@@ -197,51 +253,56 @@ final class Weather: ObservableObject {
         }
     }
 
-    static func describe(_ code: Int) -> (icon: String, word: String) {
+    /// Касание по карточке: обновить.
+    func tapped() {
+        #if DEBUG
+        if Self.demo {
+            demoIndex = (demoIndex + 1) % Self.demos.count
+            now = Self.demos[demoIndex]
+            return
+        }
+        #endif
+        Task { await load(force: true) }
+    }
+
+    static func kind(_ code: Int) -> Sky.Kind {
         switch code {
-        case 0: return ("sun.max.fill", "ясно")
-        case 1, 2: return ("cloud.sun.fill", "переменная облачность")
-        case 3: return ("cloud.fill", "пасмурно")
-        case 45, 48: return ("cloud.fog.fill", "туман")
-        case 51...57: return ("cloud.drizzle.fill", "морось")
-        case 61...67, 80...82: return ("cloud.rain.fill", "дождь")
-        case 71...77, 85, 86: return ("cloud.snow.fill", "снег")
-        case 95...99: return ("cloud.bolt.rain.fill", "гроза")
-        default: return ("cloud.fill", "облачно")
+        case 0, 1: return .clear
+        case 45, 48: return .fog
+        case 51...67, 80...82: return .rain
+        case 71...77, 85, 86: return .snow
+        case 95...99: return .storm
+        default: return .cloudy
         }
     }
-}
 
-// ── мысль дня картинкой: «Поделиться» отдаёт PNG ───────────────────────────
-struct QuoteImage: Transferable {
-    let quote: Quote
-
-    static var transferRepresentation: some TransferRepresentation {
-        DataRepresentation(exportedContentType: .png) { item in try await item.png() }
-    }
-
-    @MainActor func png() throws -> Data {
-        let r = ImageRenderer(content: QuoteArt(quote: quote))
-        r.scale = 3
-        guard let data = r.uiImage?.pngData() else { throw APIError(message: "Не получилось нарисовать картинку.") }
-        return data
-    }
-}
-
-private struct QuoteArt: View {
-    let quote: Quote
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("МЫСЛЬ ДНЯ").font(.caption.weight(.heavy)).foregroundStyle(.white.opacity(0.8))
-            Text("«\(quote.text)»").font(.title2.weight(.bold)).foregroundStyle(.white).fixedSize(horizontal: false, vertical: true)
-            Text("\(quote.who) · \(quote.about)").font(.subheadline).foregroundStyle(.white.opacity(0.85))
-            Text("ITdesk").font(.caption.weight(.bold)).foregroundStyle(.white.opacity(0.6))
+    static func word(_ code: Int) -> String {
+        switch code {
+        case 0: return "ясно"
+        case 1, 2: return "переменная облачность"
+        case 3: return "пасмурно"
+        case 45, 48: return "туман"
+        case 51...57: return "морось"
+        case 61...67, 80...82: return "дождь"
+        case 71...77, 85, 86: return "снег"
+        case 95...99: return "гроза"
+        default: return "облачно"
         }
-        .padding(28)
-        .frame(width: 380, alignment: .leading)
-        .background(Brand.gradient)
     }
+
+    #if DEBUG
+    /// Тур в симуляторе (REPORTER_WEATHER_DEMO): погода без сети, касание по карточке листает сцены.
+    static let demo = ProcessInfo.processInfo.environment["REPORTER_WEATHER_DEMO"] != nil
+    private var demoIndex = 0
+    static let demos: [Sky] = [
+        Sky(temp: 6, hi: 8, lo: 2, wind: 9, kind: .rain, word: "дождь", day: true, season: .autumn, place: "Актобе"),
+        Sky(temp: -12, hi: -8, lo: -17, wind: 4, kind: .snow, word: "снег", day: true, season: .winter, place: "Актобе"),
+        Sky(temp: 14, hi: 16, lo: 5, wind: 3, kind: .clear, word: "ясно", day: true, season: .spring, place: "Актобе"),
+        Sky(temp: 27, hi: 31, lo: 18, wind: 14, kind: .storm, word: "гроза", day: true, season: .summer, place: "Актобе"),
+        Sky(temp: 9, hi: 13, lo: 4, wind: 2, kind: .clear, word: "ясно", day: false, season: .spring, place: "Актобе"),
+        Sky(temp: 4, hi: 7, lo: 1, wind: 6, kind: .fog, word: "туман", day: true, season: .autumn, place: "Актобе"),
+    ]
+    #endif
 }
 
 // ── поздравление в WhatsApp ─────────────────────────────────────────────────
@@ -409,17 +470,6 @@ struct Fall: View {
             try? await Task.sleep(for: .seconds(7))
             flakes = []
             go = false
-        }
-    }
-
-    /// Что падает сегодня: Наурыз — тюльпаны, зима — снег, весна — цветы, осень — листья.
-    static var season: [String] {
-        if Holidays.nauryz { return ["🌷", "🌸", "🌼"] }
-        switch Calendar(identifier: .gregorian).component(.month, from: Date()) {
-        case 12, 1, 2: return ["❄️"]
-        case 3, 4, 5: return ["🌸"]
-        case 9, 10, 11: return ["🍂", "🍁"]
-        default: return []
         }
     }
 }

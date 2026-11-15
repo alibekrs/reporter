@@ -51,6 +51,7 @@ final class Tour {
         for i in 0..<7 { shot("splash\(i)"); pause(0.5) }    // заставка по кадрам
         pause(1.5)
         shot("home")
+        weather()
         checkBar()
         checkAdd("Главная")
         assets()
@@ -1544,11 +1545,30 @@ final class Tour {
         return q.allElementsBoundByIndex.first { $0.exists && $0.isHittable && s.contains($0.frame) }
     }
 
+    /// Карточка погоды: касание листает сцены (осень с дождём, зима, весна, лето с грозой, весенняя ночь, туман).
+    private func weather() {
+        let card = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Погода: "))
+        for i in 0..<6 {
+            guard let c = visible(card) else {
+                XCTFail("Главная: нет карточки погоды (сцена \(i))")
+                return
+            }
+            if i > 0 {
+                c.tap()
+                pause(1.5)
+            }
+            shot("weather-\(i)")
+        }
+        visible(card)?.tap()                                // обратно к первой сцене
+        pause(0.5)
+    }
+
     // ── действия ────────────────────────────────────────────────────────────
 
     private func launch() {
         app.launchArguments = ["-AppleLanguages", "(ru)", "-AppleLocale", "ru_RU"]
         app.launchEnvironment["REPORTER_TEST_KEY"] = Self.testKey
+        app.launchEnvironment["REPORTER_WEATHER_DEMO"] = "1"     // погода без сети: сцены по касанию
         app.launch()
     }
 

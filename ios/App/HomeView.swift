@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Главная: цитата дня, неделя отчёта, картриджи и сотрудники, быстрые кнопки.
+/// Главная: погода, неделя отчёта, картриджи и сотрудники, быстрые кнопки.
 /// Стекло здесь без .interactive(): страницы лежат в одной ленте, и интерактивное стекло главной забирало
 /// короткие касания на других страницах в тех же местах экрана (переключатели настроек не нажимались).
 struct HomeView: View {
@@ -11,7 +11,6 @@ struct HomeView: View {
 
     @State private var shown = false
     @State private var grow = false
-    @State private var quote = Quotes.todayIndex
     @State private var summaryOpen = false
     @State private var searchOpen = false
     @State private var auditOpen = false
@@ -23,7 +22,7 @@ struct HomeView: View {
     @AppStorage(Weather.cityKey) private var city = ""
     @State private var cityAsk = false
     @State private var cityDraft = ""
-    @State private var weatherTick = 0               // значок погоды оживает: появился, обновили
+    @State private var weekHeight: CGFloat = 214     // карточка погоды — той же высоты, что неделя отчёта
     @ObservedObject private var weather = Weather.shared
     @Environment(\.openURL) private var openURL
     @Environment(\.colorScheme) private var scheme
@@ -47,15 +46,18 @@ struct HomeView: View {
                         Text(greeting).font(.headline)
                     }
                     .rise(shown, 0)
-                    weatherChip.rise(shown, 0.01)
+                    WeatherCard(weather: weather, city: city, height: weekHeight) {
+                        cityDraft = ""
+                        cityAsk = true
+                    }
+                    .rise(shown, 0.01)
                     holiday.rise(shown, 0.02)
                     birthdays(soon).rise(shown, 0.03)
                     congrats(party).rise(shown, 0.04)
                     inWorkCard.rise(shown, 0.04)
-                    weekSummary.rise(shown, 0.05)
-                    quoteCard.overlay(alignment: .bottomTrailing) { quoteShare }
-                        .modifier(Parallax(amount: 6)).rise(shown, 0.05)
-                    weekCard.modifier(Parallax(amount: 10)).rise(shown, 0.12)
+                    weekCard
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { weekHeight = $0 }
+                        .modifier(Parallax(amount: 10)).rise(shown, 0.12)
                     tiles.rise(shown, 0.19)
                     summaryButton.rise(shown, 0.23)
                     actions.rise(shown, 0.28)
@@ -65,13 +67,13 @@ struct HomeView: View {
                 .padding(.bottom, 24)
             }
             .clearsBar(add: true)          // талисман стоит и на главной
-            // «потяни вниз»: робот показывается, отпустили — крутится, погода и мысль дня обновляются.
+            // «потяни вниз»: робот показывается, отпустили — крутится, погода обновляется.
             // Следим только за оттягиванием выше начала (меньше нуля): обычная прокрутка главную не трогает
             .onScrollGeometryChange(for: CGFloat.self) { min(0, $0.contentOffset.y + $0.contentInsets.top) } action: { _, y in pulled(y) }
             .overlay(alignment: .top) { PullBot(pull: pull) }
-            // день рождения сегодня — шарики; Наурыз — тюльпаны; иначе — по сезону
+            // день рождения сегодня — шарики; листопад и снег теперь только в карточке погоды
             .overlay(alignment: .top) {
-                Fall(emoji: party.isEmpty ? Fall.season : ["🎈", "🎉"], on: shown, day: store.today)
+                Fall(emoji: party.isEmpty ? [] : ["🎈", "🎉"], on: shown, day: store.today)
                     .frame(height: 420).allowsHitTesting(false)
             }
             .overlay(alignment: .topTrailing) {
@@ -115,7 +117,6 @@ struct HomeView: View {
         }
         .onAppear { if ready { start() } }
         .onChange(of: ready) { _, r in if r { start() } }
-        .onChange(of: store.today) { _, _ in quote = Quotes.todayIndex }     // новый день — новая мысль дня
     }
 
     // ── дни рождения ────────────────────────────────────────────────────────
@@ -182,58 +183,9 @@ struct HomeView: View {
         return name.map { "\(hello), \($0)" } ?? hello
     }
 
-    /// После 20:00 вместо мысли дня — пожелание отдохнуть (талисман в это время тоже спит). До пяти утра:
-    /// с пяти приветствие уже «Доброе утро», и «рабочий день окончен» рядом с ним выглядело ошибкой.
-    private var evening: Bool {
-        let h = Calendar.current.component(.hour, from: Date())
-        return h >= 20 || h < 5
-    }
-
     private var today: String {
         let s = Dates.human.string(from: Date())
         return s.prefix(1).uppercased() + s.dropFirst()
-    }
-
-    // ── цитата дня ──────────────────────────────────────────────────────────
-    private var quoteCard: some View {
-        let q = evening ? Quote(text: "Рабочий день окончен — отдыхай 🌙", who: "ITdesk", about: "до завтра")
-            : Quotes.all[quote % Quotes.all.count]
-        return Button {
-            withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) { quote += 1 }
-        } label: {
-            VStack(alignment: .leading, spacing: 8) {
-                Label("МЫСЛЬ ДНЯ", systemImage: "sparkles")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(Brand.gold)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("«\(q.text)»")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text("\(Text(q.who).fontWeight(.semibold).foregroundStyle(.primary)) · \(q.about)")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.leading)
-                }
-                .id(quote)
-                .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
-                                        removal: .move(edge: .leading).combined(with: .opacity)))
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .overlay(alignment: .topTrailing) {
-                Image(systemName: "quote.closing")
-                    .font(.system(size: 40, weight: .black))
-                    .foregroundStyle(Brand.sun.opacity(0.35))
-                    .padding(10)
-                    .allowsHitTesting(false)
-            }
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        }
-        .buttonStyle(PressStyle())
-        .feel(.selection, trigger: quote)
-        .accessibilityHint("Следующая цитата")
     }
 
     // ── неделя отчёта ───────────────────────────────────────────────────────
@@ -437,48 +389,8 @@ private struct PullBot: View {
     }
 }
 
-// ── 5.5: погода, праздник, заявки в работе, итог недели, поздравления, проверка данных ──
+// ── 5.5: праздник, заявки в работе, поздравления, проверка данных ──
 extension HomeView {
-    @ViewBuilder var weatherChip: some View {
-        if let text = weather.text {
-            Label {
-                Text(text).font(.subheadline.weight(.semibold))
-            } icon: {
-                // значок живой: появился или обновили — подпрыгивает, а капли дождя и снежинки пробегают по нему
-                Image(systemName: weather.icon).symbolRenderingMode(weatherColors).foregroundStyle(Brand.blue)
-                    .symbolEffect(.bounce, value: weatherTick)
-                    .symbolEffect(.variableColor.iterative, value: weatherTick)
-                    .onAppear { weatherTick += 1 }
-            }
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .glassEffect(.regular, in: Capsule())
-        } else if weather.loading {
-            Text("+00° · погода загружается").font(.subheadline)
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                .glassEffect(.regular, in: Capsule())
-                .redacted(reason: .placeholder)
-        } else if city.trimmed.isEmpty {
-            // город не указан — погоды нет вовсе; подсказываем, где её включить
-            Button {
-                cityDraft = ""
-                cityAsk = true
-            } label: {
-                Label {
-                    Text("Погода: указать город").foregroundStyle(.primary)
-                } icon: {
-                    Image(systemName: "cloud.sun.fill").symbolRenderingMode(weatherColors).foregroundStyle(Brand.blue)
-                }
-                .font(.subheadline.weight(.semibold))
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                .glassEffect(.regular, in: Capsule())
-            }
-            .buttonStyle(PressStyle())
-        }
-    }
-
-    /// Цветной значок погоды — только на тёмном: в светлой теме его белое облако на светлом стекле не видно.
-    var weatherColors: SymbolRenderingMode { scheme == .dark ? .multicolor : .hierarchical }
-
     @ViewBuilder var holiday: some View {
         if let h = Holidays.near() {
             HStack(spacing: 12) {
@@ -538,31 +450,6 @@ extension HomeView {
         }
     }
 
-    /// Пятница и выходные: итог недели.
-    @ViewBuilder var weekSummary: some View {
-        let wd = Calendar(identifier: .gregorian).component(.weekday, from: Date())
-        if wd == 6 || wd == 7 || wd == 1 {
-            let monday = Dates.monday(Date())
-            let from = Dates.text(monday)
-            let to = Dates.text(Calendar(identifier: .gregorian).date(byAdding: .day, value: 6, to: monday) ?? monday)
-            let entries = store.entries(week: monday).count
-            let carts = store.state.carts.filter { $0.issued_at >= from && $0.issued_at <= to }.reduce(0) { $0 + $1.qty }
-            let broken = store.state.employees.filter { !Store.isDismissed($0) && trouble($0) > 0 }.count
-            HStack(spacing: 12) {
-                Text(broken == 0 ? "🎉" : "📋").font(.largeTitle)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("ИТОГ НЕДЕЛИ").font(.caption2.weight(.bold)).foregroundStyle(Brand.gold)
-                    Text("\(entries) \(plural(entries, "заявка", "заявки", "заявок")), \(carts) \(plural(carts, "картридж", "картриджа", "картриджей")), "
-                         + (broken == 0 ? "без проблем" : "с проблемой: \(broken)"))
-                        .font(.subheadline.weight(.semibold))
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(14)
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        }
-    }
-
     @ViewBuilder var auditCard: some View {
         if issues > 0 {
             Button { auditOpen = true } label: {
@@ -580,19 +467,6 @@ extension HomeView {
         }
     }
 
-    /// Мысль дня картинкой — в Telegram, WhatsApp, куда угодно.
-    var quoteShare: some View {
-        ShareLink(item: QuoteImage(quote: currentQuote), preview: SharePreview("Мысль дня", image: Image(systemName: "quote.bubble.fill"))) {
-            Image(systemName: "square.and.arrow.up").font(.footnote.weight(.semibold)).padding(12)
-        }
-        .accessibilityLabel("Поделиться мыслью дня")
-    }
-
-    var currentQuote: Quote {
-        evening ? Quote(text: "Рабочий день окончен — отдыхай 🌙", who: "ITdesk", about: "до завтра")
-            : Quotes.all[quote % Quotes.all.count]
-    }
-
     func pulled(_ y: CGFloat) {
         pull.y = y
         if y < -80 && !pull.armed {
@@ -605,8 +479,6 @@ extension HomeView {
                 try? await Task.sleep(for: .seconds(0.9))
                 pull.spinning = false
             }
-            withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) { quote += 1 }
-            weatherTick += 1
             Task { await weather.load(force: true) }
         }
     }
