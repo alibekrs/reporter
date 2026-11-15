@@ -212,19 +212,19 @@ struct WeatherScene: View {
 
     var body: some View {
         // всё нужное кадру — здесь, в body: состояние, прочитанное только внутри Canvas, перерисовку не вызывает
-        let sky = self.sky, tree = self.tree, size = self.size
-        let shape: Sakura? = size.height > 0 ? Sakura.shape(size.height * 0.95) : nil
+        let sky = self.sky, img = tree, box = size
+        let shape: Sakura? = box.height > 0 ? Sakura.shape(box.height * 0.95) : nil
         let tone: CGFloat = !sky.day ? 0.42 : sky.kind == .storm ? 0.7 : 1
         TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !active || Motion.reduced)) { tl in
             Canvas { ctx, sz in
-                ScenePainter(sky: sky, tree: tree, shape: shape, tone: Double(tone),
+                ScenePainter(sky: sky, tree: img, shape: shape, tone: Double(tone),
                              t: tl.date.timeIntervalSince1970.truncatingRemainder(dividingBy: 3600)).draw(&ctx, sz)
             }
         }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
-        .task(id: "\(sky.season)-\(tone)-\(sky.day)-\(Int(size.width))x\(Int(size.height))-\(scale)") {
-            guard size.width > 0, size.height > 0 else { return }
-            tree = await Sakura.image(sky.season, tone: tone, night: !sky.day, size: size, scale: scale)
+        .task(id: "\(sky.season)-\(tone)-\(sky.day)-\(Int(box.width))x\(Int(box.height))-\(scale)") {
+            guard box.width > 0, box.height > 0 else { return }
+            tree = await Sakura.image(sky.season, tone: tone, night: !sky.day, size: box, scale: scale)
         }
         .accessibilityHidden(true)
     }
