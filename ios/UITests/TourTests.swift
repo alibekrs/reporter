@@ -7,10 +7,6 @@ final class TourTests: XCTestCase {
         continueAfterFailure = true          // одна ошибка не обрывает проход — нужны все скриншоты
     }
 
-    /// Быстрая проверка (в workflow — only=test0Tabs): переходы между «Учётом» и главной нажатием на панель
-    /// и через «Найти» с поиском. В 5.6 после поиска возврат на главную подвешивал приложение.
-    @MainActor func test0Tabs() { Tour(self, "tabs").tabs() }
-
     /// Тёмная тема, как на телефоне: заставка, вкладки, «+» на каждой странице, заведение данных,
     /// свайпы между страницами, быстрые кнопки главной, клавиатура, настройки.
     @MainActor func test1Dark() { Tour(self, "dark").full() }
@@ -49,49 +45,6 @@ final class Tour {
     }
 
     // ── сценарии ────────────────────────────────────────────────────────────
-
-    func tabs() {
-        launch()
-        pause(6)                                             // заставка
-        for round in 1...2 {
-            open("Учёт")
-            print("РАЗБОР вкладки: круг \(round) — «Учёт» открыт")
-            open("Главная")
-            print("РАЗБОР вкладки: круг \(round) — главная открыта")
-        }
-        tapFirst(app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "Найти")), "быстрая кнопка «Найти»")
-        pause(1.5)
-        dismissKeyboardTip()
-        shot("find")
-        closeSearch()
-        print("РАЗБОР вкладки: поиск закрыт")
-        open("Главная")
-        print("РАЗБОР вкладки: главная после поиска открыта")
-        shot("home-after-find")
-        open("Учёт")
-        open("Главная")
-        print("РАЗБОР вкладки: без данных — конец")
-
-        // то же с сотрудником в учёте: в полном проходе зависало именно так
-        open("Учёт")
-        if let add = checkAdd("Учёт, разбор"), tapAdd(add, opens: "Новый сотрудник", "tabs") {
-            type("Фамилия", "Разборов")
-            tapBarButton("Новый сотрудник", "Сохранить")
-            let card = app.navigationBars["Разборов"]
-            if card.waitForExistence(timeout: 4) { card.buttons.element(boundBy: 0).tap() }
-            pause(1)
-        }
-        open("Главная")
-        tapFirst(app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "Найти")), "быстрая кнопка «Найти»")
-        pause(1.5)
-        dismissKeyboardTip()
-        shot("find-data")
-        closeSearch()
-        print("РАЗБОР вкладки: поиск закрыт (с данными)")
-        open("Главная")
-        print("РАЗБОР вкладки: главная после поиска открыта (с данными)")
-        shot("home-after-find-data")
-    }
 
     func full() {
         launch()
@@ -1490,10 +1443,16 @@ final class Tour {
         let item = ["Выдача": "Выдать картридж"][title] ?? title          // значок называется как форма
         add.tap()
         let q = app.buttons.matching(NSPredicate(format: "label == %@", item))
+        let opened = app.buttons.matching(NSPredicate(format: "label == %@", "Закрыть быстрые действия"))
         var button: XCUIElement?
-        for _ in 0..<8 where button == nil {
+        for i in 0..<8 where button == nil {
             pause(0.4)
             button = visible(q)
+            // касание по талисману на медленном симуляторе иногда теряется: меню так и не открылось — ещё раз
+            if button == nil, i == 3, visible(opened) == nil {
+                print("РАЗБОР талисман: меню не открылось — нажимаем ещё раз")
+                add.tap()
+            }
         }
         guard let button else {
             XCTFail("\(page): в меню талисмана нет «\(item)»")

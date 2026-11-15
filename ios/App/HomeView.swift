@@ -182,10 +182,11 @@ struct HomeView: View {
         return name.map { "\(hello), \($0)" } ?? hello
     }
 
-    /// После 20:00 вместо мысли дня — пожелание отдохнуть (талисман в это время тоже спит).
+    /// После 20:00 вместо мысли дня — пожелание отдохнуть (талисман в это время тоже спит). До пяти утра:
+    /// с пяти приветствие уже «Доброе утро», и «рабочий день окончен» рядом с ним выглядело ошибкой.
     private var evening: Bool {
         let h = Calendar.current.component(.hour, from: Date())
-        return h >= 20 || h < 6
+        return h >= 20 || h < 5
     }
 
     private var today: String {

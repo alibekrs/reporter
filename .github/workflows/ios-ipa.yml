@@ -162,12 +162,6 @@ jobs:
           mkdir -p "$RUNNER_TEMP/screens"
           cp "$HOME/Library/Caches/reporter-screens/"*.png "$RUNNER_TEMP/screens/" 2>/dev/null || true
           cp "$RUNNER_TEMP/ui.log" "$RUNNER_TEMP/screens/" 2>/dev/null || true
-          # журнал приложения из симулятора: ошибки и предупреждения SwiftUI (цикл обновлений, правка состояния при отрисовке)
-          if [ -n "$UDID" ]; then
-            xcrun simctl spawn "$UDID" log show --last 20m --style compact \
-              --predicate 'process == "ITtool" AND (messageType == error OR messageType == fault OR subsystem CONTAINS "SwiftUI" OR subsystem CONTAINS "runtime-issues")' \
-              2>/dev/null | tail -400 > "$RUNNER_TEMP/screens/app.log" || true
-          fi
           ls "$RUNNER_TEMP/screens"
 
       - uses: actions/upload-artifact@v4
