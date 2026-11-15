@@ -111,6 +111,11 @@ jobs:
           # без подсказки «проведите по клавиатуре» при первом наборе текста (тест закрывает её и сам)
           xcrun simctl spawn "$UDID" defaults write com.apple.Preferences DidShowContinuousPathIntroduction -bool true
           xcrun simctl spawn "$UDID" defaults write com.apple.Preferences KeyboardContinuousPathEnabled -bool false
+          # меньше работы у клавиатуры симулятора: пока она на экране, медленная машина временами переставала
+          # отвечать тесту на минуты («Timed out while evaluating UI query»)
+          for key in KeyboardAutocorrection KeyboardPrediction KeyboardShowPredictionBar KeyboardCheckSpelling; do
+            xcrun simctl spawn "$UDID" defaults write com.apple.Preferences "$key" -bool false
+          done
           echo "UDID=$UDID" >> "$GITHUB_ENV"
 
       - name: UI tests
@@ -130,6 +135,9 @@ jobs:
               if { [ "$hot" -ge 3 ] || [ "${retries:-0}" -gt "$seen" ]; } && [ "$n" -lt 4 ]; then
                 n=$((n + 1)); hot=0; seen=${retries:-0}
                 sample "$pid" 3 -file "$RUNNER_TEMP/screens/hang-$n-cpu${cpu:-0}.txt" > /dev/null 2>&1 || true
+                # и кто в этот момент занимает процессор и память на машине
+                { top -l 2 -n 25 -o cpu -stats pid,command,cpu,mem,threads | tail -n 32; vm_stat; } \
+                  > "$RUNNER_TEMP/screens/hang-$n-top.txt" 2> /dev/null || true
               fi
             done ) &
           watch=$!
