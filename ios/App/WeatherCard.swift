@@ -81,10 +81,11 @@ struct Sakura: Sendable {
             }
             let n = d < 2 ? 2 : 2 + (r() < 0.45 ? 1 : 0)
             for i in 0..<n {
-                let spread = (d == 0 ? 0.62 : 0.5) + r() * 0.25
+                let spread = (d == 0 ? 0.4 : 0.45) + r() * 0.25
                 var a = ang + (n == 2 ? (i == 1 ? spread : -spread) : CGFloat(i - 1) * spread) + (r() - 0.5) * 0.25
-                if d > 1 { a += a < -.pi / 2 ? -0.12 : 0.12 }      // сакура раскидистая: ветви в стороны
-                branch(e, a, len * (0.7 + r() * 0.12), wd * 0.64, d + 1)
+                if d > 1 { a += a < -.pi / 2 ? -0.08 : 0.08 }      // сакура раскидистая: ветви в стороны
+                a = min(max(a, -.pi + 0.3), -0.3)                    // но не свисают вниз — крона куполом
+                branch(e, a, len * (0.64 + r() * 0.12), wd * 0.64, d + 1)
             }
         }
         branch(.zero, -.pi / 2 + 0.05, h * 0.3, 15, 0)
@@ -107,7 +108,7 @@ struct Sakura: Sendable {
     @MainActor static func image(_ season: Season, tone: CGFloat, night: Bool, size: CGSize, scale: CGFloat) async -> UIImage {
         let key = "\(season)-\(tone)-\(night)-\(Int(size.width))x\(Int(size.height))@\(scale)"
         if let img = images[key] { return img }
-        let tree = shape(size.height * 0.95)
+        let tree = shape(size.height * 0.84)
         let img = await Task.detached(priority: .userInitiated) {
             Self.render(tree, season, tone: tone, night: night, size: size, scale: scale)
         }.value
@@ -123,7 +124,7 @@ struct Sakura: Sendable {
         format.opaque = false
         return UIGraphicsImageRenderer(size: size, format: format).image { rc in
             let c = rc.cgContext
-            c.translateBy(x: size.width * 0.72, y: size.height - 20)
+            c.translateBy(x: size.width * 0.62, y: size.height - 20)
             var seed: UInt64 = 11
             func r() -> CGFloat {
                 seed = (seed * 16807) % 2147483647
@@ -165,7 +166,7 @@ struct Sakura: Sendable {
             }
             guard !cols.isEmpty else { return }
             // цветы и листья гроздьями на концах и по внешним ветвям; во втором проходе верх грозди светлее
-            let spots = tree.tips + tree.segs.filter { $0.depth >= 4 }.map(\.m)
+            let spots = tree.tips + tree.segs.filter { $0.depth >= 2 }.flatMap { [$0.m, $0.b] }   // и внутри кроны, без дыры
             let many = season == .spring ? 7 : 5
             let lit: UInt32 = season == .spring ? 0xFFF4F8 : season == .summer ? 0x7CC36A : 0xF7C75A
             for pass in 0..<2 {
@@ -213,7 +214,7 @@ struct WeatherScene: View {
     var body: some View {
         // всё нужное кадру — здесь, в body: состояние, прочитанное только внутри Canvas, перерисовку не вызывает
         let sky = self.sky, img = tree, box = size
-        let shape: Sakura? = box.height > 0 ? Sakura.shape(box.height * 0.95) : nil
+        let shape: Sakura? = box.height > 0 ? Sakura.shape(box.height * 0.84) : nil
         let tone: CGFloat = !sky.day ? 0.42 : sky.kind == .storm ? 0.7 : 1
         TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !active || Motion.reduced)) { tl in
             Canvas { ctx, sz in
@@ -304,7 +305,7 @@ private struct ScenePainter {
         }
 
         // земля
-        ctx.fill(Path(ellipseIn: CGRect(x: W * 0.72 - W * 0.42, y: H + 18 - 52, width: W * 0.84, height: 104)),
+        ctx.fill(Path(ellipseIn: CGRect(x: W * 0.62 - W * 0.42, y: H + 18 - 52, width: W * 0.84, height: 104)),
                  with: .color(toned(sky.season.ground, tone)))
         if sky.season == .winter || kind == .snow {
             ctx.fill(Path(ellipseIn: CGRect(x: W * 0.5 - W * 0.75, y: H + 14 - 26, width: W * 1.5, height: 52)),
@@ -314,7 +315,7 @@ private struct ScenePainter {
         // дерево качается: основание стоит, верхушка уходит по ветру
         let g = w / 20
         let sway = (sin(tt * (0.9 + g)) * 0.6 + sin(tt * 2.3) * 0.25) * g * 12 + g * 9
-        let bx = W * 0.72, by = H - 20, k = -sway / (H * 0.9)
+        let bx = W * 0.62, by = H - 20, k = -sway / (H * 0.9)
         if let tree {
             var c = ctx
             c.concatenate(CGAffineTransform(a: 1, b: 0, c: k, d: 1, tx: -k * by, ty: 0))
@@ -449,10 +450,10 @@ struct WeatherCard: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(PressStyle())
-            .accessibilityElement(children: .ignore)
             .accessibilityLabel("Погода: \(signed(now.temp)), \(now.word), ветер \(now.wind) м/с, \(now.place). "
                                 + "Днём \(signed(now.hi)), ночью \(signed(now.lo)). \(now.tip)")
             .accessibilityHint("Обновить погоду")
+            .accessibilityAddTraits(.isButton)
         } else if weather.loading {
             VStack(alignment: .leading, spacing: 6) {
                 Text("+00°").font(.system(size: 44, weight: .heavy, design: .rounded))
