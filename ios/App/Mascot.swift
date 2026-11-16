@@ -5,6 +5,8 @@ import SwiftUI
 struct PixelBot: View {
     enum Mood { case idle, blink, happy, sleep, note, wave }
     var mood: Mood = .idle
+    /// По погоде: зонт, шарф с шапкой или тёмные очки.
+    var outfit: Weather.Sky.Outfit = .plain
     @AppStorage(Theme.key) private var palette = Theme.defaultID      // смена темы перекрашивает робота
 
     var body: some View {
@@ -101,6 +103,38 @@ struct PixelBot: View {
             c.draw(Text("Z").font(.system(size: 22, weight: .heavy)).foregroundStyle(p.sky), at: CGPoint(x: 160, y: 38))
             c.draw(Text("z").font(.system(size: 15, weight: .heavy)).foregroundStyle(p.sky), at: CGPoint(x: 178, y: 22))
         }
+        switch outfit {
+        case .umbrella:
+            var stick = Path()
+            stick.move(to: CGPoint(x: 160, y: 24))
+            stick.addLine(to: CGPoint(x: 160, y: 168))
+            stick.addQuadCurve(to: CGPoint(x: 148, y: 170), control: CGPoint(x: 160, y: 178))
+            c.stroke(stick, with: .color(Color(hex: 0x475569)), style: StrokeStyle(lineWidth: 5, lineCap: .round))
+            var top = Path()
+            top.move(to: CGPoint(x: 108, y: 34))
+            top.addQuadCurve(to: CGPoint(x: 212, y: 34), control: CGPoint(x: 160, y: -26))
+            for i in 0..<4 {
+                let x = 212 - CGFloat(i) * 26
+                top.addQuadCurve(to: CGPoint(x: x - 26, y: 34), control: CGPoint(x: x - 13, y: 24))
+            }
+            c.fill(top, with: .color(Color(hex: 0xA855F7)))
+        case .warm:
+            c.fill(Path(roundedRect: CGRect(x: 48, y: 148, width: 104, height: 16), cornerRadius: 8), with: .color(Color(hex: 0xEF4444)))
+            c.fill(Path(roundedRect: CGRect(x: 116, y: 154, width: 16, height: 34), cornerRadius: 5), with: .color(Color(hex: 0xDC2626)))
+            var hat = Path()
+            hat.move(to: CGPoint(x: 40, y: 74))
+            hat.addQuadCurve(to: CGPoint(x: 160, y: 74), control: CGPoint(x: 100, y: -14))
+            c.fill(hat, with: .color(Color(hex: 0xEF4444)))
+            c.fill(Path(roundedRect: CGRect(x: 36, y: 64, width: 128, height: 16), cornerRadius: 8), with: .color(Color(hex: 0xFECACA)))
+            c.fill(Path(ellipseIn: CGRect(x: 90, y: 6, width: 20, height: 20)), with: .color(.white))
+        case .shades:
+            for x in [62.0, 102.0] {
+                c.fill(Path(roundedRect: CGRect(x: x, y: 94, width: 36, height: 24), cornerRadius: 8), with: .color(Color(hex: 0x111111)))
+            }
+            line(CGPoint(x: 98, y: 102), CGPoint(x: 102, y: 102), Color(hex: 0x111111), 4)
+        case .plain:
+            break
+        }
         if mood == .happy {
             for (x, y, col) in [(30.0, 40.0, p.sun), (170, 36, p.sky), (20, 90, Color.yellow), (182, 80, p.sun), (50, 18, Color.green)] {
                 c.fill(Path(roundedRect: CGRect(x: x, y: y, width: 8, height: 12), cornerRadius: 2), with: .color(col))
@@ -157,6 +191,8 @@ struct MascotMenu: View {
     @State private var wave = false
     @State private var waved = false
     @State private var taps = 0
+    @State private var remark: String?
+    @ObservedObject private var weather = Weather.shared
 
     static let size: CGFloat = 64
     fileprivate static let items = MascotItem.allCases
@@ -265,7 +301,7 @@ struct MascotMenu: View {
     }
 
     private var bot: some View {
-        PixelBot(mood: mood)
+        PixelBot(mood: mood, outfit: weather.now?.outfit ?? .plain)
             .frame(width: Self.size, height: Self.size)
             .contentShape(Circle())
             .onTapGesture { toggle() }
@@ -278,6 +314,8 @@ struct MascotMenu: View {
             .overlay(alignment: .topTrailing) {
                 if !greeted && shown && !open {
                     label("Нажми на меня — быстрые действия").offset(x: -6, y: -40)
+                } else if let remark, shown && !open {
+                    label(remark).offset(x: -6, y: -40)          // робот говорит о погоде
                 }
             }
             .scaleEffect(shown ? 1 : 0.2)
@@ -308,6 +346,11 @@ struct MascotMenu: View {
             wave = false
             try? await Task.sleep(for: .milliseconds(220))
         }
+        // помахал — говорит о погоде (подсказка «нажми на меня» важнее)
+        guard greeted, let r = weather.now?.remark else { return }
+        withAnimation { remark = r }
+        try? await Task.sleep(for: .seconds(4))
+        withAnimation { remark = nil }
     }
 
     private func blinking() async {

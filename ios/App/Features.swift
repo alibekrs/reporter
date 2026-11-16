@@ -154,26 +154,43 @@ final class Weather: ObservableObject {
     private var place = ""
 
     struct Sky: Equatable {
-        enum Kind { case clear, cloudy, fog, rain, snow, storm }
+        enum Kind { case clear, cloudy, fog, rain, snow, storm, hail }
         var temp: Int, hi: Int, lo: Int
         var wind: Int                      // м/с
         var kind: Kind
         var word: String                   // «дождь»
-        var day: Bool
-        var season: Season
         var place: String
+        /// Восход и закат, часы от полуночи (8.5 — 8:30).
+        var sunrise: Double, sunset: Double
+        /// Дождь кончился в последние часы — радуга, лужи, капли на листьях.
+        var after = false
+        /// Сегодня первый снег этой зимы.
+        var first = false
+        /// Тур в симуляторе: сцена на заданные дату и время; nil — сейчас.
+        var fixed: Date? = nil
+        /// Тур: шарики и облако-сердечко без дня рождения в базе.
+        var bday = false
 
-        /// Ночь и гроза — картинка тёмная, текст на ней белый.
-        var dark: Bool { !day || kind == .storm }
+        var date: Date { fixed ?? Date() }
+        var light: Double { Sky.light(date, sunrise, sunset) }
+        var day: Bool { light > 0.5 }
+        var wet: Bool { kind == .rain || kind == .storm || kind == .hail }
+        /// Ночь, гроза и град — картинка тёмная, текст на ней белый.
+        var dark: Bool { light < 0.45 || kind == .storm || kind == .hail }
+        var signedTemp: String { (temp > 0 ? "+" : "") + "\(temp)°" }
 
         var tip: String {
+            if first { return "❄️ Первый снег!" }
+            if Sky.march8(date) { return "💐 С 8 Марта!" }
             switch kind {
             case .storm: return "⚡ Гроза — держите технику на ИБП"
+            case .hail: return "🧊 Град — машину под крышу"
             case .rain: return temp <= 1 ? "🧊 Гололёд — выходите пораньше" : "☂️ Возьмите зонт"
             case .snow: return "❄️ Снегопад — на дорогу больше времени"
             case .fog: return "🌫️ Туман — осторожно за рулём"
             case .clear, .cloudy: break
             }
+            if after { return day ? "🌈 Дождь кончился — гляньте на радугу" : "🙂 Дождь кончился" }
             if wind >= 14 { return "💨 Сильный ветер" }
             if temp >= 28 { return "🥤 Жарко — пейте воду" }
             if temp <= -15 { return "🧣 Мороз — одевайтесь теплее" }
@@ -181,11 +198,81 @@ final class Weather: ObservableObject {
             return day ? "🙂 Хорошая погода" : "🌙 Хорошего вечера"
         }
 
-        /// Картинка без данных: город не указан или погода ещё грузится — сезон и время суток сегодняшние.
+        /// К приветствию: «на улице дождь, +6°».
+        var phrase: String {
+            let w: String
+            if first { w = "выпал первый снег" }
+            else if after && !wet { w = "дождь кончился" }
+            else {
+                switch kind {
+                case .clear: w = day ? (temp >= 28 ? "на улице жара" : "на улице солнечно") : "на улице ясно"
+                case .cloudy: w = "на улице облачно"
+                case .fog: w = "на улице туман"
+                default: w = "на улице " + word
+                }
+            }
+            return w + ", " + signedTemp
+        }
+
+        /// Робот одет по погоде.
+        enum Outfit { case plain, umbrella, warm, shades }
+        var outfit: Outfit {
+            if wet { return .umbrella }
+            if temp <= 0 { return .warm }
+            if temp >= 27 && day && kind == .clear { return .shades }
+            return .plain
+        }
+
+        /// Что робот говорит о погоде.
+        var remark: String {
+            if first { return "Первый снег! Я уже в шапке ❄️" }
+            if Sky.march8(date) { return "С 8 Марта! Мимоза уже на ветке 💐" }
+            switch kind {
+            case .storm: return "Гроза — проверьте ИБП, а я под зонтом ⚡"
+            case .hail: return "Град! Хорошо, что у меня зонт 🧊"
+            case .rain: return temp <= 1 ? "Скользко! Иду осторожно с зонтом" : "Дождь — я взял зонт ☂️"
+            default: break
+            }
+            if wind >= 14 { return "Держусь за антенну — ветер 💨" }
+            if temp <= -15 { return "Мороз! Шарф и шапка обязательно 🥶" }
+            if temp <= 0 { return "Холодно — я в шарфе 🧣" }
+            if outfit == .shades { return "Жарко! Пейте воду, я в очках 😎" }
+            if kind == .fog { return "Туман — не спешите на дороге" }
+            return day ? "Хорошего дня! 🙂" : "Уже поздно… хорошего вечера 🌙"
+        }
+
+        /// Картинка без данных: город не указан или погода ещё грузится — сегодняшние дата и время суток.
         static func placeholder() -> Sky {
-            let h = Calendar.current.component(.hour, from: Date())
-            return Sky(temp: 0, hi: 0, lo: 0, wind: 3, kind: .clear, word: "", day: (6..<20).contains(h),
-                       season: Season.of(Date()), place: "")
+            let s = approxSun(Date())
+            return Sky(temp: 0, hi: 0, lo: 0, wind: 3, kind: .clear, word: "", place: "", sunrise: s.0, sunset: s.1)
+        }
+
+        /// 0 — ночь, 1 — день; у восхода и заката — плавно, за час.
+        static func light(_ d: Date, _ sr: Double, _ ss: Double) -> Double {
+            let h = hours(d)
+            return step(sr - 0.6, sr + 0.6, h) * (1 - step(ss - 0.6, ss + 0.6, h))
+        }
+
+        static func hours(_ d: Date) -> Double {
+            let c = Calendar.current.dateComponents([.hour, .minute], from: d)
+            return Double(c.hour ?? 12) + Double(c.minute ?? 0) / 60
+        }
+
+        static func step(_ a: Double, _ b: Double, _ x: Double) -> Double {
+            let t = max(0, min(1, (x - a) / (b - a)))
+            return t * t * (3 - 2 * t)
+        }
+
+        /// Восход и закат без сети — примерно, для средних широт Казахстана.
+        static func approxSun(_ d: Date) -> (Double, Double) {
+            let doy = Double(Calendar.current.ordinality(of: .day, in: .year, for: d) ?? 1)
+            let c = cos(2 * .pi * (doy + 10) / 365)
+            return (6.7 + 1.8 * c, 18.6 - 2.2 * c)
+        }
+
+        static func march8(_ d: Date) -> Bool {
+            let c = Calendar.current.dateComponents([.month, .day], from: d)
+            return c.month == 3 && c.day == 8
         }
     }
 
@@ -211,10 +298,15 @@ final class Weather: ObservableObject {
             let results: [R]?
         }
         struct Now: Decodable {
-            struct C: Decodable { let temperature_2m: Double; let weather_code: Int; let wind_speed_10m: Double; let is_day: Int }
-            struct D: Decodable { let temperature_2m_max: [Double]; let temperature_2m_min: [Double] }
+            struct C: Decodable { let temperature_2m: Double; let weather_code: Int; let wind_speed_10m: Double }
+            struct D: Decodable {
+                let temperature_2m_max: [Double]; let temperature_2m_min: [Double]
+                let sunrise: [String]?; let sunset: [String]?
+            }
+            struct Hr: Decodable { let precipitation: [Double?]? }
             let current: C
             let daily: D
+            let hourly: Hr?
         }
         do {
             var g = URLComponents(string: "https://geocoding-api.open-meteo.com/v1/search")!
@@ -231,8 +323,11 @@ final class Weather: ObservableObject {
             var f = URLComponents(string: "https://api.open-meteo.com/v1/forecast")!
             f.queryItems = [URLQueryItem(name: "latitude", value: String(r.latitude)),
                             URLQueryItem(name: "longitude", value: String(r.longitude)),
-                            URLQueryItem(name: "current", value: "temperature_2m,weather_code,wind_speed_10m,is_day"),
-                            URLQueryItem(name: "daily", value: "temperature_2m_max,temperature_2m_min"),
+                            URLQueryItem(name: "current", value: "temperature_2m,weather_code,wind_speed_10m"),
+                            URLQueryItem(name: "daily", value: "temperature_2m_max,temperature_2m_min,sunrise,sunset"),
+                            URLQueryItem(name: "hourly", value: "precipitation"),
+                            URLQueryItem(name: "past_hours", value: "3"),
+                            URLQueryItem(name: "forecast_hours", value: "1"),
                             URLQueryItem(name: "wind_speed_unit", value: "ms"),
                             URLQueryItem(name: "forecast_days", value: "1"),
                             URLQueryItem(name: "timezone", value: "auto")]
@@ -240,17 +335,43 @@ final class Weather: ObservableObject {
             let n = try JSONDecoder().decode(Now.self, from: wd)
             let c = n.current
             let t = Int(c.temperature_2m.rounded())
-            now = Sky(temp: t,
-                      hi: n.daily.temperature_2m_max.first.map { Int($0.rounded()) } ?? t,
-                      lo: n.daily.temperature_2m_min.first.map { Int($0.rounded()) } ?? t,
-                      wind: Int(c.wind_speed_10m.rounded()), kind: Self.kind(c.weather_code), word: Self.word(c.weather_code),
-                      day: c.is_day == 1, season: Season.of(Date()), place: r.name)
+            let kind = Self.kind(c.weather_code)
+            let sun = Sky.approxSun(Date())
+            let wasRain = (n.hourly?.precipitation ?? []).compactMap { $0 }.reduce(0, +) > 0.1
+            var sky = Sky(temp: t,
+                          hi: n.daily.temperature_2m_max.first.map { Int($0.rounded()) } ?? t,
+                          lo: n.daily.temperature_2m_min.first.map { Int($0.rounded()) } ?? t,
+                          wind: Int(c.wind_speed_10m.rounded()), kind: kind, word: Self.word(c.weather_code), place: r.name,
+                          sunrise: Self.clock(n.daily.sunrise?.first) ?? sun.0, sunset: Self.clock(n.daily.sunset?.first) ?? sun.1)
+            sky.after = wasRain && !sky.wet && kind != .snow
+            sky.first = Self.firstSnow(kind == .snow)
+            now = sky
             problem = nil
             at = Date()
             place = city
         } catch {
             // нет связи: оставляем прошлое, если было
         }
+    }
+
+    /// «2026-11-16T08:12» → 8.2
+    static func clock(_ iso: String?) -> Double? {
+        guard let t = iso?.split(separator: "T").last else { return nil }
+        let p = t.split(separator: ":").compactMap { Double($0) }
+        return p.count >= 2 ? p[0] + p[1] / 60 : nil
+    }
+
+    /// Первый снег зимы: запоминаем день, когда снег пошёл впервые с июля; весь этот день — «Первый снег!».
+    static func firstSnow(_ snowing: Bool, _ d: Date = Date()) -> Bool {
+        let c = Calendar.current.dateComponents([.year, .month, .day], from: d)
+        let winter = (c.month ?? 1) >= 7 ? (c.year ?? 0) : (c.year ?? 0) - 1
+        let today = "\(winter)|\(c.year ?? 0)-\(c.month ?? 0)-\(c.day ?? 0)"
+        let key = "weather.firstSnow"
+        let saved = UserDefaults.standard.string(forKey: key) ?? ""
+        if saved.hasPrefix("\(winter)|") { return saved == today }
+        guard snowing else { return false }
+        UserDefaults.standard.set(today, forKey: key)
+        return true
     }
 
     /// Касание по карточке: обновить.
@@ -271,7 +392,8 @@ final class Weather: ObservableObject {
         case 45, 48: return .fog
         case 51...67, 80...82: return .rain
         case 71...77, 85, 86: return .snow
-        case 95...99: return .storm
+        case 96, 99: return .hail
+        case 95: return .storm
         default: return .cloudy
         }
     }
@@ -285,22 +407,49 @@ final class Weather: ObservableObject {
         case 51...57: return "морось"
         case 61...67, 80...82: return "дождь"
         case 71...77, 85, 86: return "снег"
-        case 95...99: return "гроза"
+        case 96, 99: return "гроза с градом"
+        case 95: return "гроза"
         default: return "облачно"
         }
     }
 
     #if DEBUG
     /// Тур в симуляторе (REPORTER_WEATHER_DEMO): погода без сети, касание по карточке листает сцены.
+    /// Сцен столько же, сколько снимков в TourTests.weather().
     static let demo = ProcessInfo.processInfo.environment["REPORTER_WEATHER_DEMO"] != nil
     private var demoIndex = 0
+
+    private static func scene(_ m: Int, _ d: Int, _ h: Double, _ kind: Sky.Kind, _ word: String, _ temp: Int, _ wind: Int,
+                              after: Bool = false, first: Bool = false, bday: Bool = false) -> Sky {
+        var c = DateComponents(year: 2026, month: m, day: d, hour: Int(h), minute: Int((h - h.rounded(.down)) * 60))
+        c.calendar = Calendar.current
+        let date = c.date ?? Date()
+        let sun = Sky.approxSun(date)
+        return Sky(temp: temp, hi: temp + 2, lo: temp - 4, wind: wind, kind: kind, word: word, place: "Актобе",
+                   sunrise: sun.0, sunset: sun.1, after: after, first: first, fixed: date, bday: bday)
+    }
+
     static let demos: [Sky] = [
-        Sky(temp: 6, hi: 8, lo: 2, wind: 9, kind: .rain, word: "дождь", day: true, season: .autumn, place: "Актобе"),
-        Sky(temp: -12, hi: -8, lo: -17, wind: 4, kind: .snow, word: "снег", day: true, season: .winter, place: "Актобе"),
-        Sky(temp: 14, hi: 16, lo: 5, wind: 3, kind: .clear, word: "ясно", day: true, season: .spring, place: "Актобе"),
-        Sky(temp: 27, hi: 31, lo: 18, wind: 14, kind: .storm, word: "гроза", day: true, season: .summer, place: "Актобе"),
-        Sky(temp: 9, hi: 13, lo: 4, wind: 2, kind: .clear, word: "ясно", day: false, season: .spring, place: "Актобе"),
-        Sky(temp: 4, hi: 7, lo: 1, wind: 6, kind: .fog, word: "туман", day: true, season: .autumn, place: "Актобе"),
+        scene(11, 16, 13, .rain, "дождь", 6, 9),                       // осень, дождь, лужи, капли на стекле
+        scene(4, 15, 11, .clear, "ясно", 16, 3, bday: true),           // цветение, птичка, шарики, облако-сердечко
+        scene(3, 22, 12, .clear, "ясно", 9, 3),                        // Наурыз: тюльпаны, почки
+        scene(6, 8, 14, .clear, "ясно", 26, 9),                        // тополиный пух, воздушный змей, бабочки
+        scene(7, 19, 17, .storm, "гроза", 27, 14),                     // гроза
+        scene(6, 24, 16, .hail, "гроза с градом", 22, 12),             // град
+        scene(7, 9, 23, .clear, "ясно", 21, 1),                        // светлячки, фонарик, глаза кошки
+        scene(8, 12, 23.5, .clear, "ясно", 19, 1),                     // Персеиды
+        scene(9, 12, 15, .clear, "ясно", 18, 2, after: true),          // радуга, капли на листьях, сентябрь
+        scene(10, 15, 8.5, .clear, "ясно", 6, 2),                      // ёжик, паутинка, ковёр листьев
+        scene(10, 25, 22, .clear, "ясно", 7, 1, after: true),          // луна в луже
+        scene(10, 25, 9, .fog, "туман", 4, 6),                         // туман
+        scene(11, 20, 19.5, .cloudy, "облачно", 1, 4),                 // пятница вечер: гирлянда
+        scene(11, 20, 10, .snow, "снег", -2, 3, first: true),          // первый снег
+        scene(12, 31, 21, .snow, "снег", -9, 2),                       // Новый год
+        scene(1, 15, 8.75, .clear, "ясно", -22, 1),                    // иней, узор мороза, снеговик
+        scene(1, 20, 23, .clear, "ясно", -18, 1),                      // северное сияние
+        scene(1, 30, 12, .clear, "ясно", -8, 2),                       // снегирь, белка
+        scene(2, 13, 13, .clear, "ясно", 3, 2),                        // оттепель, сосульки; пятница 13 — чёрная кошка
+        scene(3, 8, 12, .clear, "ясно", 4, 2),                         // 8 Марта
     ]
     #endif
 }

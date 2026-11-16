@@ -46,7 +46,7 @@ struct HomeView: View {
                         Text(greeting).font(.headline)
                     }
                     .rise(shown, 0)
-                    WeatherCard(weather: weather, city: city, height: weekHeight) {
+                    WeatherCard(weather: weather, city: city, height: weekHeight, bday: !party.isEmpty) {
                         cityDraft = ""
                         cityAsk = true
                     }
@@ -180,7 +180,8 @@ struct HomeView: View {
         let hello = h < 5 ? "Доброй ночи" : h < 12 ? "Доброе утро" : h < 18 ? "Добрый день" : h < 23 ? "Добрый вечер" : "Доброй ночи"
         let fio = (UserDefaults.standard.string(forKey: "mail.responsible") ?? "").split(separator: " ")
         let name = fio.count > 1 ? fio[1] : fio.first
-        return name.map { "\(hello), \($0)" } ?? hello
+        let base = name.map { "\(hello), \($0)" } ?? hello
+        return weather.now.map { base + " · " + $0.phrase } ?? base     // «Добрый день · на улице дождь, +6°»
     }
 
     private var today: String {
@@ -480,6 +481,8 @@ extension HomeView {
                 pull.spinning = false
             }
             Task { await weather.load(force: true) }
+            SceneFX.shared.shake(strong: true)              // дерево в карточке погоды встряхивается
+            SceneFX.shared.birdAt = Date().timeIntervalSince1970
         }
     }
 

@@ -1545,10 +1545,10 @@ final class Tour {
         return q.allElementsBoundByIndex.first { $0.exists && $0.isHittable && s.contains($0.frame) }
     }
 
-    /// Карточка погоды: касание листает сцены (осень с дождём, зима, весна, лето с грозой, весенняя ночь, туман).
+    /// Карточка погоды: касание листает 20 сцен тура (Weather.demos): сезоны, праздники, ночь, град, иней.
     private func weather() {
         let card = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Погода: "))
-        for i in 0..<6 {
+        for i in 0..<20 {
             guard let c = visible(card) else {
                 XCTFail("Главная: нет карточки погоды (сцена \(i))")
                 return
