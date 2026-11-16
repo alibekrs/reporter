@@ -630,7 +630,8 @@ private struct ScenePainter {
         var sunX: CGFloat?
         if look.clearish && L > 0.05 {
             let p = CGFloat(max(0, min(1, (look.hour - sky.sunrise) / (sky.sunset - sky.sunrise))))
-            let x = W * (0.36 + 0.58 * p), y = H * 0.62 - sin(.pi * p) * H * 0.5, dusk = 1 - sin(.pi * p)
+            // правая половина: слева текст, низкое утреннее солнце его закрывало
+            let x = W * (0.56 + 0.38 * p), y = H * 0.62 - sin(.pi * p) * H * 0.5, dusk = 1 - sin(.pi * p)
             var s = sk
             s.opacity = L
             var rays = Path()
